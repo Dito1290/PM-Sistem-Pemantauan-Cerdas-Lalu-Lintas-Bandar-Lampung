@@ -1,0 +1,6 @@
+# Needed only on Celery workers that run YOLO inference.
+# NOT installed/verified in the development environment used to build this
+# backend (no model weights were available). Check the Ultralytics version
+# supports the chosen variant (YOLOv8n / YOLO11n / YOLO26n) before pinning.
+-r requirements.txt
+ultralytics>=8.3

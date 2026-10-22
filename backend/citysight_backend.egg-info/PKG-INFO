@@ -1,0 +1,5 @@
+Metadata-Version: 2.4
+Name: citysight-backend
+Version: 0.1.0
+Summary: CitySight Bandar Lampung - CCTV vehicle counting backend (Flask, Celery, Redis, PostgreSQL, YOLO)
+Requires-Python: >=3.10

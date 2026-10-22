@@ -1,0 +1,12 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "citysight-backend"
+version = "0.1.0"
+description = "CitySight Bandar Lampung - CCTV vehicle counting backend (Flask, Celery, Redis, PostgreSQL, YOLO)"
+requires-python = ">=3.10"
+
+[tool.setuptools.packages.find]
+include = ["citysight*"]
