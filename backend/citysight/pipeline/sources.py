@@ -10,7 +10,9 @@ class InvalidStreamUrl(ValueError):
 
 
 def is_file_source(url: str) -> bool:
-    return url.startswith("file://") or url.startswith("/")
+    # os.path.isabs also accepts Windows paths such as C:\videos\a.mp4, which
+    # urlsplit would otherwise read as a URL with scheme "c".
+    return url.startswith("file://") or os.path.isabs(url)
 
 
 def file_path(url: str) -> str:

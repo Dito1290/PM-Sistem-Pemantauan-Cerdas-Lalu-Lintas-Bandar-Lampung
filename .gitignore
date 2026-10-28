@@ -13,3 +13,6 @@ __pycache__/
 .coverage
 htmlcov/
 instance/
+
+# YOLO weights are distributed outside git (see backend/models/README.md)
+backend/models/*.pt

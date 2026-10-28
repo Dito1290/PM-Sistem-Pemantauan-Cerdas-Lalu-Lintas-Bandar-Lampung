@@ -25,6 +25,8 @@ from .sources import file_path, is_file_source, mask_url
 
 log = logging.getLogger(__name__)
 
+MAX_LAG_SECONDS = 2.0
+
 
 class Capture(Protocol):
     def isOpened(self) -> bool: ...
@@ -144,16 +146,27 @@ class StreamReader(threading.Thread):
 
     def _read_loop(self, capture: Capture) -> str:
         interval = self.settings.frame_interval
-        file_period = self._file_frame_period(capture) if self.is_file else 0.0
+        period = self._frame_period(capture)
         next_sample = time.monotonic()
+        play_at = None
         while not self.stop_event.is_set():
             if not capture.grab():
                 if self.is_file and self.settings.loop_files and self._rewind(capture):
                     continue
                 return "frame tidak dapat dibaca (stream terputus)"
-            if file_period:
-                # Play local test videos at their native speed, like a live feed.
-                self.stop_event.wait(file_period)
+            # Release frames at the video's native speed, like a live player.
+            # HLS delivers a whole segment (several seconds) in one burst; sampling
+            # the burst by wall clock keeps only ~2 frames per segment (measured
+            # 0.4 fps instead of 5). Local test videos are paced the same way.
+            # If reading falls more than MAX_LAG_SECONDS behind, resync instead
+            # of trying to catch up.
+            now = time.monotonic()
+            if play_at is None or now - play_at > MAX_LAG_SECONDS:
+                play_at = now
+            else:
+                play_at += period
+                if play_at > now:
+                    self.stop_event.wait(play_at - now)
             now = time.monotonic()
             if now < next_sample:
                 continue
@@ -185,7 +198,7 @@ class StreamReader(threading.Thread):
                 log.exception("Camera %s: cannot schedule detection", self.camera_id)
 
     @staticmethod
-    def _file_frame_period(capture: Capture) -> float:
+    def _frame_period(capture: Capture) -> float:
         import cv2
 
         fps = capture.get(cv2.CAP_PROP_FPS) or 0
