@@ -166,7 +166,8 @@
   transition: transform 200ms var(--ease-out-quint);
   transform-origin: 50% 100%;
 }
-.camera-pin[data-active="true"] { transform: scale(1.6); }
+.camera-pin[data-active="true"] { transform: scale(1.45); }
+.camera-pin[data-active="false"] { opacity: 0.75; }
 
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after {

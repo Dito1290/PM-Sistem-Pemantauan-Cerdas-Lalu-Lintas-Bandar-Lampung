@@ -64,8 +64,9 @@ export function SiteFooter() {
         ))}
 
         <div className="col-span-2 lg:col-span-4 lg:col-start-9">
-          <p className="m-0">Dinas Komunikasi dan Informatika Kota Bandar Lampung</p>
-          <p className="mt-3">Proyek Mandiri, Semester 5. Sistem Pemantauan Cerdas Lalu Lintas berbasis deep learning.</p>
+          <h2 className="text-body font-medium tracking-normal">Pengelola</h2>
+          <p className="mt-3">Dinas Komunikasi dan Informatika Kota Bandar Lampung</p>
+          <p className="mt-2">Proyek Mandiri, Semester 5. Sistem Pemantauan Cerdas Lalu Lintas berbasis deep learning.</p>
         </div>
       </div>
 

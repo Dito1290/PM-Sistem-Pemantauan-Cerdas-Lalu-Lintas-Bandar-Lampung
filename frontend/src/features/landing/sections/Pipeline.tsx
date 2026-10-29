@@ -38,31 +38,33 @@ const FIELDS: { tone: string; clause: string }[] = [
 
 export function Pipeline() {
   return (
-    <section id="cara-kerja" aria-labelledby="cara-kerja-title" className="flex flex-col lg:flex-row">
-      {FIELDS.map((field, i) => (
-        <div
-          key={field.clause}
-          className={`relative flex min-h-[64svh] flex-col gap-8 p-5 lg:h-[84svh] lg:w-1/4 lg:gap-0 lg:p-7 ${field.tone}`}
-        >
-          {i === 0 ? (
-            <Reveal>
-              <h2 id="cara-kerja-title" className="text-lead tracking-[-0.03em] lg:absolute lg:top-7 lg:left-7">
-                Dari kamera ke angka
-              </h2>
-            </Reveal>
-          ) : null}
+    <section id="cara-kerja" aria-labelledby="cara-kerja-title">
+      <div className="page-x grid gap-6 bg-ground pt-[clamp(80px,10vw,144px)] pb-10 lg:grid-cols-2 lg:items-end lg:gap-8 lg:pb-14">
+        <Reveal>
+          <h2 id="cara-kerja-title" className="text-head">
+            Dari kamera ke angka
+          </h2>
+        </Reveal>
+        <Reveal order={1}>
+          <p className="max-w-[44ch]">
+            Satu frame dari CAM-01 melewati empat tahap sebelum menjadi angka di dasbor. Tidak ada rekaman yang
+            disimpan di sepanjang jalan.
+          </p>
+        </Reveal>
+      </div>
 
-          <Reveal order={i} className="lg:absolute lg:bottom-7 lg:left-7 lg:right-7 lg:order-last">
-            <p className="max-w-[16ch] text-lead leading-[1.1] tracking-[-0.03em]">{field.clause}</p>
-          </Reveal>
-
-          <div className="lg:absolute lg:top-[30%] lg:left-1/2 lg:-translate-x-1/2">
-            <Reveal order={i + 1}>
+      <ol className="m-0 grid list-none p-0 sm:grid-cols-2 lg:grid-cols-4">
+        {FIELDS.map((field, i) => (
+          <li key={field.clause} className={`flex min-h-[520px] flex-col gap-10 p-5 lg:min-h-[600px] lg:p-8 ${field.tone}`}>
+            <Reveal order={i}>
               <PipelineCard stage={i as Stage} />
             </Reveal>
-          </div>
-        </div>
-      ))}
+            <Reveal order={i + 1} className="mt-auto">
+              <p className="max-w-[16ch] text-lead leading-[1.1] tracking-[-0.03em]">{field.clause}</p>
+            </Reveal>
+          </li>
+        ))}
+      </ol>
     </section>
   );
 }
@@ -70,10 +72,9 @@ export function Pipeline() {
 function PipelineCard({ stage }: { stage: Stage }) {
   return (
     <article
-      data-ui
-      className="w-[260px] bg-ground text-ink transition-transform duration-150 ease-out hover:-translate-y-1.5"
+      className="w-full max-w-[320px] bg-ground text-ink transition-transform duration-150 ease-out hover:-translate-y-1.5"
     >
-      <header className="flex items-baseline justify-between px-3 py-2 text-small">
+      <header data-ui className="flex items-baseline justify-between px-3 py-2 text-small">
         <span className="font-medium">CAM-01</span>
         <span style={{ fontVariantNumeric: "tabular-nums" }}>{stage === 3 ? "14.00–15.00" : "14.32.08"}</span>
       </header>
@@ -82,7 +83,7 @@ function PipelineCard({ stage }: { stage: Stage }) {
       {stage === 2 ? <FrameCounts /> : null}
       {stage === 3 ? <HourlyRow /> : null}
 
-      <footer className="bg-surface px-3 py-2 text-small">
+      <footer data-ui className="px-3 pt-1 pb-3 text-small font-medium">
         {["Menerima frame", "3 objek terdeteksi", "Total 3 kendaraan", "Tersimpan ke statistik per jam"][stage]}
       </footer>
     </article>
@@ -116,6 +117,7 @@ function Frame({ stage }: { stage: Stage }) {
           ? BOXES.map((box) => (
               <span
                 key={box.left}
+                data-ui
                 className="absolute outline-2 outline-accent-ink"
                 style={{ left: box.left, top: box.top, width: box.width, height: box.height }}
               >
@@ -141,7 +143,7 @@ function FrameCounts() {
     ["Truk", 0],
   ] as const;
   return (
-    <dl className="m-0 grid grid-cols-2 gap-x-3 gap-y-4 px-3 py-4">
+    <dl data-ui className="m-0 grid grid-cols-2 gap-x-3 gap-y-4 px-3 py-4">
       {rows.map(([label, value]) => (
         <div key={label}>
           <dt className="text-small">{label}</dt>
@@ -157,7 +159,7 @@ function FrameCounts() {
 function HourlyRow() {
   const total = HOURLY.reduce((sum, row) => sum + row.value, 0);
   return (
-    <div className="px-3 pb-3">
+    <div data-ui className="px-3 pb-3">
       <p className="m-0 text-head font-medium tracking-[-0.04em]" style={{ fontVariantNumeric: "tabular-nums" }}>
         {fmt.format(total)}
       </p>

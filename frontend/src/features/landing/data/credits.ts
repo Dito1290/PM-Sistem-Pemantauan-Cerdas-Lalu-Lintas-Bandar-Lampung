@@ -10,25 +10,11 @@ export const CREDITS: Credit[] = [
     usedFor: "siger di pembuka",
   },
   {
-    title: "Bundaran Tugu Adipura Bandar Lampung",
-    creator: "Sakurai Midori",
-    license: "CC BY-SA 3.0",
-    page: "https://commons.wikimedia.org/w/index.php?curid=4515925",
-    usedFor: "peta, CAM-01",
-  },
-  {
     title: "Jalan Pangeran Antasari - Bandar Lampung",
     creator: "Firzafp",
     license: "CC BY-SA 4.0",
     page: "https://commons.wikimedia.org/w/index.php?curid=90502945",
-    usedFor: "peta, CAM-02 dan bagian tentang",
-  },
-  {
-    title: "Jalan Ikan Hiu Bandar Lampung",
-    creator: "Sakurai Midori",
-    license: "CC BY-SA 3.0",
-    page: "https://commons.wikimedia.org/w/index.php?curid=4515953",
-    usedFor: "peta, CAM-03",
+    usedFor: "bagian tentang",
   },
   {
     title: "Ground Level View of Jalan Teknika Selatan",

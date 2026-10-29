@@ -1,10 +1,11 @@
 import { motion } from "motion/react";
 import type { ReactNode } from "react";
+import { CAMERAS } from "../data/cameras";
 
 /*
  * A board of close-ups: each tile enlarges one real control or readout from
- * the dashboard (built in em, scaled through the root font size). Blocks run
- * off the tile edges; their words stay whole.
+ * the dashboard. Every tile follows the same frame: the element sits at the
+ * top-left padding, the caption at the bottom-left, nothing is cropped.
  */
 
 type Tone = "surface" | "surface-2" | "field" | "deep";
@@ -28,16 +29,16 @@ type TileProps = {
 function Tile({ tone, layout, name, line, order, children }: TileProps) {
   return (
     <motion.li
-      className={`group relative overflow-hidden ${TONES[tone]} ${layout}`}
+      className={`group flex flex-col justify-between gap-6 p-5 lg:p-6 ${TONES[tone]} ${layout}`}
       initial={{ opacity: 0, y: 24 }}
       whileInView={{ opacity: 1, y: 0 }}
       viewport={{ once: true, margin: "0px 0px -10% 0px" }}
       transition={{ duration: 0.7, ease: [0.22, 1, 0.36, 1], delay: (order % 4) * 0.075 }}
     >
-      <div data-ui className="absolute inset-0 transition-transform duration-500 ease-out group-hover:scale-[1.04]">
+      <div data-ui className="origin-top-left transition-transform duration-500 ease-out group-hover:scale-[1.03]">
         {children}
       </div>
-      <div className="absolute bottom-5 left-5 right-5">
+      <div>
         <h3 className="text-body leading-tight font-medium tracking-[-0.01em]">{name}</h3>
         <p className="mt-1 text-small leading-snug">{line}</p>
       </div>
@@ -47,14 +48,21 @@ function Tile({ tone, layout, name, line, order, children }: TileProps) {
 
 const tabular = { fontVariantNumeric: "tabular-nums" } as const;
 
+const STATUS: Record<number, { word: string; on: boolean }> = {
+  1: { word: "Online", on: true },
+  2: { word: "Online", on: true },
+  3: { word: "Menyambung", on: false },
+};
+
 export function Capabilities() {
   return (
-    <section id="kemampuan" aria-labelledby="kemampuan-title" className="bg-ground p-[6px] lg:p-[10px]">
-      <ul className="m-0 grid list-none auto-rows-[28vw] grid-cols-2 gap-[6px] p-0 lg:auto-rows-[104px] lg:grid-cols-12 lg:gap-2">
-        <li className="col-span-2 row-span-2 bg-surface-2 p-5 lg:col-span-6 lg:col-start-1 lg:row-start-1">
+    <section id="kemampuan" aria-labelledby="kemampuan-title" className="bg-ground px-[6px] pb-[6px] lg:px-2 lg:pb-2">
+      <ul className="m-0 grid list-none auto-rows-[minmax(28vw,auto)] grid-cols-2 gap-[6px] p-0 lg:auto-rows-[104px] lg:grid-cols-12 lg:gap-2">
+        <li className="col-span-2 row-span-2 flex flex-col justify-between gap-6 bg-surface-2 p-5 lg:col-span-6 lg:col-start-1 lg:row-start-1 lg:p-6">
           <h2 id="kemampuan-title" className="text-[9vw] lg:text-head">
             Yang dilihat operator
           </h2>
+          <p className="max-w-[44ch]">Delapan bagian dasbor, diperbesar dari layar aslinya.</p>
         </li>
 
         <Tile
@@ -64,11 +72,11 @@ export function Capabilities() {
           line="Mobil, motor, bus, dan truk dihitung terpisah."
           order={0}
         >
-          <div data-ui className="absolute top-[14%] left-[6%] flex flex-wrap gap-[0.3em] pr-[6%] text-[2.2rem] lg:text-head">
+          <div className="grid w-max grid-cols-2 gap-2 text-[2rem] lg:text-head">
             {["Mobil", "Motor", "Bus", "Truk"].map((label) => (
               <span
                 key={label}
-                className={`px-[0.4em] py-[0.12em] whitespace-nowrap ${label === "Motor" ? "bg-deep text-deep-ink" : "bg-ground text-ink"}`}
+                className={`px-[0.35em] py-[0.08em] ${label === "Motor" ? "bg-deep text-deep-ink" : "bg-ground text-ink"}`}
               >
                 {label}
               </span>
@@ -78,18 +86,25 @@ export function Capabilities() {
 
         <Tile
           tone="deep"
-          layout="row-span-2 lg:col-span-3 lg:row-span-4 lg:col-start-1 lg:row-start-3"
+          layout="col-span-2 row-span-2 lg:col-span-3 lg:row-span-4 lg:col-start-1 lg:row-start-3"
           name="Status tiap kamera"
           line="Online, offline, atau menyambung ulang."
           order={1}
         >
-          <div
-            data-ui
-            className="absolute top-[12%] right-[-2em] flex items-center gap-[0.35em] bg-ground py-[0.15em] pr-[2.4em] pl-[0.45em] text-[1.6rem] text-ink lg:text-head"
-          >
-            <span className="inline-block size-[0.42em] rounded-full bg-[#2f7d32]" aria-hidden="true" />
-            Online
-          </div>
+          <ul className="m-0 flex list-none flex-col gap-2 p-0">
+            {CAMERAS.map((camera) => (
+              <li key={camera.id} className="flex items-center justify-between gap-3 bg-ground px-3 py-2 text-small text-ink">
+                <span>{camera.name}</span>
+                <span className="flex items-center gap-2 font-medium whitespace-nowrap">
+                  <span
+                    aria-hidden="true"
+                    className={`inline-block size-2.5 rounded-full ${STATUS[camera.id].on ? "bg-[#2f7d32]" : "bg-[#b26a00]"}`}
+                  />
+                  {STATUS[camera.id].word}
+                </span>
+              </li>
+            ))}
+          </ul>
         </Tile>
 
         <Tile
@@ -99,7 +114,7 @@ export function Capabilities() {
           line="Admin mengelola kamera, operator memantau."
           order={2}
         >
-          <div data-ui className="absolute top-[10%] right-[8%] flex pl-[0.3em] text-[1.1rem] lg:text-lead">
+          <div className="flex pl-[0.3em] text-lead">
             {["AD", "OP", "OP"].map((initials, i) => (
               <span
                 key={i}
@@ -119,26 +134,28 @@ export function Capabilities() {
           line="Batas kamera aktif dijaga sistem."
           order={3}
         >
-          <div data-ui className="absolute top-[-0.35em] right-[-0.5em] text-[2.6rem] lg:text-head">
-            <span className="relative block h-[1.1em] w-[2em] rounded-full bg-field-ink">
-              <span className="absolute top-[0.12em] right-[0.12em] size-[0.86em] rounded-full bg-deep" />
-            </span>
-          </div>
+          <span className="relative block h-[1.1em] w-[2em] rounded-full bg-field-ink text-[2.25rem] lg:text-head">
+            <span className="absolute top-[0.12em] right-[0.12em] size-[0.86em] rounded-full bg-deep" />
+          </span>
         </Tile>
 
         <Tile
           tone="surface"
-          layout="row-span-2 lg:col-span-6 lg:row-span-2 lg:col-start-7 lg:row-start-5"
+          layout="col-span-2 row-span-2 lg:col-span-6 lg:row-span-2 lg:col-start-7 lg:row-start-5"
           name="Statistik per jam dan harian"
           line="Rentang sampai 31 hari, laporan harian sampai setahun."
           order={0}
         >
-          <div data-ui className="absolute top-[18%] left-[38%] w-[22em] text-[1rem] lg:text-lead">
+          <div className="text-lead">
             <span className="relative block h-[0.3em] w-full bg-surface-2">
               <span className="absolute inset-y-0 left-0 w-[46%] bg-ink" />
               <span className="absolute top-1/2 left-[46%] size-[1.1em] -translate-x-1/2 -translate-y-1/2 rounded-full bg-ink" />
             </span>
-            <span className="mt-[0.5em] block w-[46%] text-right font-medium">24 jam</span>
+            <span className="mt-[0.6em] flex justify-between text-body">
+              <span>1 jam</span>
+              <span className="font-medium">24 jam</span>
+              <span>31 hari</span>
+            </span>
           </div>
         </Tile>
 
@@ -149,11 +166,9 @@ export function Capabilities() {
           line="Data baru didorong ke layar lewat Server-Sent Events."
           order={1}
         >
-          <div data-ui className="absolute bottom-[34%] left-5 leading-[0.9] text-[22vw] lg:top-[8%] lg:bottom-auto lg:text-poster">
-            <span className="font-medium tracking-[-0.05em]" style={tabular}>
-              1.284
-            </span>
-          </div>
+          <span className="block text-[22vw] leading-[0.85] font-medium tracking-[-0.05em] lg:text-poster" style={tabular}>
+            1.284
+          </span>
         </Tile>
 
         <Tile
@@ -163,13 +178,9 @@ export function Capabilities() {
           line="Deteksi yang ragu tidak ikut dihitung."
           order={2}
         >
-          <div
-            data-ui
-            className="absolute top-[30%] left-[-1em] bg-ground py-[0.05em] pr-[0.3em] pl-[1.2em] text-[1.6rem] font-medium text-ink lg:text-head"
-            style={tabular}
-          >
+          <span className="inline-block bg-ground px-[0.25em] text-[2rem] font-medium text-ink lg:text-head" style={tabular}>
             ≥ 0,70
-          </div>
+          </span>
         </Tile>
 
         <Tile
@@ -179,9 +190,9 @@ export function Capabilities() {
           line="Token masuk kedaluwarsa sendiri."
           order={3}
         >
-          <div data-ui className="absolute top-[30%] left-5 text-[1.6rem] font-medium lg:text-head" style={tabular}>
+          <span className="block text-[2rem] font-medium lg:text-head" style={tabular}>
             59:41
-          </div>
+          </span>
         </Tile>
       </ul>
     </section>

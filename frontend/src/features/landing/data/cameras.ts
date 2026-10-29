@@ -1,7 +1,8 @@
 /**
- * Sample cameras for the landing page. Names, coordinates and counts are
- * placeholders until stage 2 reads GET /api/stats/summary; swap them for the
- * three Seribu Wajah cameras Diskominfo picks.
+ * The three Seribu Wajah cameras this system watches. Coordinates come from
+ * OpenStreetMap; the SD 2 Rajabasa point is approximate (the school is not on
+ * OSM) and must be confirmed. Counts are samples until stage 2 reads
+ * GET /api/stats/summary.
  */
 export type VehicleCounts = {
   car: number;
@@ -18,7 +19,6 @@ export type CameraSample = {
   description: string;
   lat: number;
   lng: number;
-  photo: { src: string; alt: string; position: string };
   typical: VehicleCounts;
 };
 
@@ -33,51 +33,40 @@ export const CAMERAS: CameraSample[] = [
   {
     id: 1,
     code: "CAM-01",
-    name: "Tugu Adipura",
-    area: "Enggal, Tanjung Karang Pusat",
+    name: "Depan SD 2 Rajabasa",
+    area: "Jl. Z.A. Pagar Alam, Rajabasa",
     description:
-      "Bundaran di jantung kota, pertemuan Jl. Raden Intan dan Jl. Ahmad Yani. Arus dari empat arah bertemu di satu lingkaran.",
-    lat: -5.4172,
-    lng: 105.258,
-    photo: {
-      src: "/media/bundaran-tugu-adipura-bandar-lampung.jpg",
-      alt: "Bundaran Tugu Adipura dengan patung gajah di bawah langit biru",
-      position: "50% 40%",
-    },
-    typical: { car: 14, motorcycle: 38, bus: 1, truck: 2 },
+      "Jalan utama dekat Terminal Rajabasa. Pagi dan siang ramai antar-jemput siswa, ditambah bus dan angkot yang keluar-masuk terminal.",
+    lat: -5.3673,
+    lng: 105.2325,
+    typical: { car: 12, motorcycle: 34, bus: 2, truck: 2 },
   },
   {
     id: 2,
     code: "CAM-02",
-    name: "Jl. Pangeran Antasari",
-    area: "Kedamaian, Tanjung Karang Timur",
+    name: "Underpass Unila",
+    area: "Jl. Z.A. Pagar Alam, Labuhan Ratu",
     description:
-      "Jalan arteri timur kota dengan lampu jalan bermahkota siger. Padat pada jam berangkat dan pulang kerja.",
-    lat: -5.414,
-    lng: 105.273,
-    photo: {
-      src: "/media/jalan-pangeran-antasari-bandar-lampung-lp-29.jpg",
-      alt: "Mobil dan motor melaju di Jalan Pangeran Antasari, lampu jalan bermotif siger",
-      position: "50% 78%",
-    },
-    typical: { car: 11, motorcycle: 27, bus: 0, truck: 3 },
+      "Jalan lintas bawah di depan Universitas Lampung. Arus dari Rajabasa menuju pusat kota lewat di sini tanpa berhenti di persimpangan.",
+    lat: -5.37176,
+    lng: 105.23925,
+    typical: { car: 18, motorcycle: 41, bus: 1, truck: 3 },
   },
   {
     id: 3,
     code: "CAM-03",
-    name: "Jl. Ikan Hiu",
-    area: "Teluk Betung Selatan",
+    name: "Tugu Adipura",
+    area: "Bundaran Gajah, Enggal",
     description:
-      "Kawasan pertokoan lama dekat pelabuhan. Becak, motor, dan truk barang berbagi jalan yang sama.",
-    lat: -5.448,
-    lng: 105.266,
-    photo: {
-      src: "/media/jalan-ikan-hiu-bandar-lampung.jpg",
-      alt: "Deretan becak di tepi Jalan Ikan Hiu, Teluk Betung, dengan ruko di kanan jalan",
-      position: "40% 70%",
-    },
-    typical: { car: 6, motorcycle: 21, bus: 0, truck: 4 },
+      "Bundaran di jantung kota, pertemuan Jl. Raden Intan dan Jl. Ahmad Yani. Arus dari empat arah bertemu di satu lingkaran.",
+    lat: -5.42229,
+    lng: 105.2582,
+    typical: { car: 14, motorcycle: 38, bus: 1, truck: 2 },
   },
 ];
 
-export const CITY_CENTER: [number, number] = [-5.428, 105.262];
+/** South-west and north-east corners that hold all three cameras. */
+export const CAMERA_BOUNDS: [[number, number], [number, number]] = [
+  [-5.4283, 105.2265],
+  [-5.3613, 105.2642],
+];
