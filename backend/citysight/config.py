@@ -85,6 +85,10 @@ class Config:
     STREAM_ALLOWED_HOSTS = _list("STREAM_ALLOWED_HOSTS", "")
     # Local video files are only for the proposal's "sumber cadangan" testing.
     ALLOW_FILE_SOURCES = _bool("ALLOW_FILE_SOURCES", False)
+    # Seribu Wajah cameras (stream_url .../list?cctv=<id>) are read through
+    # the public web player with Playwright. "chrome" uses the installed
+    # Google Chrome; empty uses Playwright's Chromium (playwright install chromium).
+    BROWSER_CHANNEL = os.getenv("BROWSER_CHANNEL", "")
 
     # --- YOLO ------------------------------------------------------------
     # No default weights ship with the repo; the variant (YOLOv8n / YOLO11n /

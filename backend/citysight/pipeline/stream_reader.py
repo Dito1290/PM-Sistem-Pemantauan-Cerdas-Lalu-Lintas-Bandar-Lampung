@@ -21,6 +21,7 @@ from typing import Callable, Protocol
 import redis
 
 from . import camera_state, frame_queue
+from .browser_capture import BrowserCapture, is_seribu_wajah_page
 from .sources import file_path, is_file_source, mask_url
 
 log = logging.getLogger(__name__)
@@ -46,6 +47,7 @@ class ReaderSettings:
     open_timeout_ms: int = 10000
     read_timeout_ms: int = 10000
     loop_files: bool = True
+    browser_channel: str = ""
 
     @classmethod
     def from_config(cls, config) -> "ReaderSettings":
@@ -56,6 +58,7 @@ class ReaderSettings:
             reconnect_delay=config["STREAM_RECONNECT_DELAY_SECONDS"],
             open_timeout_ms=config["STREAM_OPEN_TIMEOUT_MS"],
             read_timeout_ms=config["STREAM_READ_TIMEOUT_MS"],
+            browser_channel=config["BROWSER_CHANNEL"],
         )
 
 
@@ -64,6 +67,9 @@ def open_capture(url: str, settings: ReaderSettings) -> Capture:
 
     if is_file_source(url):
         return cv2.VideoCapture(file_path(url))
+    if is_seribu_wajah_page(url):
+        return BrowserCapture(url, frame_interval=settings.frame_interval,
+                              timeout=settings.read_timeout_ms / 1000, channel=settings.browser_channel)
     params = [
         cv2.CAP_PROP_OPEN_TIMEOUT_MSEC, settings.open_timeout_ms,
         cv2.CAP_PROP_READ_TIMEOUT_MSEC, settings.read_timeout_ms,

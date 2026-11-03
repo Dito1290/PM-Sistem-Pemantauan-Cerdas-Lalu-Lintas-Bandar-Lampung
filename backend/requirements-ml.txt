@@ -2,5 +2,9 @@
 # NOT installed/verified in the development environment used to build this
 # backend (no model weights were available). Check the Ultralytics version
 # supports the chosen variant (YOLOv8n / YOLO11n / YOLO26n) before pinning.
+# GPU workers: pip installs CPU-only torch on Windows. Replace it with the CUDA
+# build of the same version, e.g. for torch 2.14.1 and an NVIDIA driver with CUDA 13:
+#   pip install --force-reinstall --no-deps torch==2.14.1+cu130 torchvision==0.29.1+cu130 --index-url https://download.pytorch.org/whl/cu130
+# then set YOLO_DEVICE=0 (docs/DECISIONS.md section 6).
 -r requirements.txt
 ultralytics>=8.3
