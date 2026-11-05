@@ -201,3 +201,90 @@ def test_each_thread_gets_its_own_model(app, monkeypatch):
     for t in threads:
         t.join()
     assert len(loads) == 3 and len({id(d) for d in seen}) == 3
+
+
+# --- one stored row per DETECTION_SAVE_INTERVAL_SECONDS --------------------------
+
+def _save_every(monkeypatch, seconds):
+    # The task runs in the Flask app bound to the current Celery app, which is not
+    # always the session ``app`` fixture (other tests create apps too).
+    monkeypatch.setitem(detect_latest_frame.app.flask_app.config, "DETECTION_SAVE_INTERVAL_SECONDS", seconds)
+
+
+def _push_and_run(redis_client, camera_id, captured_at):
+    frame_queue.push_frame(redis_client, camera_id, captured_at, jpeg(), 10)
+    return detect_latest_frame.apply(args=[camera_id]).get()
+
+
+def test_only_first_frame_per_minute_is_stored(app, redis_client, make_camera, fake_detector, monkeypatch):
+    _save_every(monkeypatch, 60)
+    camera_id = make_camera()
+    pubsub = redis_client.pubsub(ignore_subscribe_messages=True)
+    pubsub.subscribe(CHANNEL)
+    minute = (time.time() // 60) * 60
+    # Frames 0.2 s apart within one minute, then the first frame of the next minute.
+    times = [minute + 1.0, minute + 1.2, minute + 1.4, minute + 60.1]
+    events = []
+    real_time = time.time
+    for at in times:
+        time.time = lambda at=at: at + 0.1  # frame is 0.1 s old, never stale
+        try:
+            events.append(_push_and_run(redis_client, camera_id, at))
+        finally:
+            time.time = real_time
+
+    assert [e["stored"] for e in events] == [True, False, False, True]
+    assert all(e["total_vehicle"] == 4 for e in events)  # live frames are still detected
+    assert events[1]["id"] is None and events[0]["id"] is not None
+    with app.app_context():
+        stored = [round(r.timestamp.timestamp(), 1) for r in db.session.scalars(select(Detection).order_by(Detection.id))]
+    assert stored == [round(times[0], 1), round(times[3], 1)]
+    published = []
+    for _ in range(10):
+        message = pubsub.get_message(timeout=0.2)
+        if message:
+            published.append(json.loads(message["data"])["stored"])
+    assert published == [True, False, False, True]  # the dashboard sees every frame
+
+
+def test_save_slot_released_when_database_is_down(app, redis_client, make_camera, fake_detector, monkeypatch):
+    from sqlalchemy.exc import OperationalError
+
+    from citysight.tasks import detection as task_mod
+
+    _save_every(monkeypatch, 60)
+    camera_id = make_camera()
+    real_save = task_mod.save_detection
+
+    def db_down(*_args):
+        raise OperationalError("INSERT", {}, Exception("down"))
+
+    monkeypatch.setattr(task_mod, "save_detection", db_down)
+    now = time.time()
+    assert _push_and_run(redis_client, camera_id, now) is None
+    monkeypatch.setattr(task_mod, "save_detection", real_save)
+    event = _push_and_run(redis_client, camera_id, now + 0.2)
+    assert event["stored"] is True  # same minute, but the failed frame did not use up the slot
+
+
+def test_task_stores_live_frame_with_counted_boxes(app, redis_client, make_camera, fake_detector, monkeypatch):
+    from citysight.pipeline import live_frame
+
+    _save_every(monkeypatch, 60)
+    camera_id = make_camera()
+    picture = jpeg(30)
+    now = time.time()
+    frame_queue.push_frame(redis_client, camera_id, now, picture, 10)
+    first = detect_latest_frame.apply(args=[camera_id]).get()
+    meta, stored_jpeg = live_frame.read(redis_client, camera_id)
+    assert stored_jpeg == picture
+    assert meta["stored"] is True and meta["timestamp"] == first["timestamp"]
+    assert [b["category"] for b in meta["boxes"]] == ["car", "motorcycle", "motorcycle", "truck"]
+    assert meta["total_vehicle"] == len(meta["boxes"]) == 4
+    assert all(0 <= v <= 1 for b in meta["boxes"] for v in b["box"])
+
+    frame_queue.push_frame(redis_client, camera_id, now + 0.2, jpeg(40), 10)
+    detect_latest_frame.apply(args=[camera_id]).get()
+    meta, _ = live_frame.read(redis_client, camera_id)
+    assert meta["stored"] is False  # frames that are only shown live are published too
+    assert redis_client.ttl(live_frame.live_key(camera_id)) > 0

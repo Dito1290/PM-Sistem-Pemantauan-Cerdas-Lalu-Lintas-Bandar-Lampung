@@ -1,7 +1,7 @@
 """JSON shapes shared by the REST API and realtime events."""
 from __future__ import annotations
 
-from ..models import Camera, Detection, HourlyStat
+from ..models import Anomaly, Camera, Detection, HourlyStat
 from ..timeutil import isoformat
 
 
@@ -48,4 +48,18 @@ def hourly_to_dict(stat: HourlyStat) -> dict:
         "avg_vehicle": round(stat.avg_vehicle, 2),
         "max_vehicle": stat.max_vehicle,
         "total_detections": stat.total_detections,
+    }
+
+
+def anomaly_to_dict(anomaly: Anomaly, camera_name: str | None = None) -> dict:
+    return {
+        "id": anomaly.id,
+        "camera_id": anomaly.camera_id,
+        "camera_name": camera_name,
+        "type": anomaly.type,
+        "status": "active" if anomaly.is_active else "ended",
+        "started_at": isoformat(anomaly.started_at),
+        "ended_at": isoformat(anomaly.ended_at),
+        "message": anomaly.message,
+        "details": anomaly.details,
     }

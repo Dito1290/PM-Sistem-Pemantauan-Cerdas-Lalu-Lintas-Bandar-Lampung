@@ -1,4 +1,9 @@
-"""Celery task: count vehicles in the newest buffered frame of one camera."""
+"""Celery task: count vehicles in the newest buffered frame of one camera.
+
+Every frame is detected and sent to the live dashboard (SSE), but only the
+first frame of each DETECTION_SAVE_INTERVAL_SECONDS bucket per camera is
+stored in PostgreSQL (advisor: one row per camera per minute). 0 stores all.
+"""
 from __future__ import annotations
 
 import logging
@@ -11,12 +16,14 @@ from flask import current_app
 from sqlalchemy.exc import IntegrityError, OperationalError
 
 from ..extensions import db
-from ..pipeline import camera_state, frame_queue
+from ..pipeline import camera_state, frame_queue, live_frame
 from ..pipeline.detector import ModelConfigError, ModelUnavailable, get_detector
 from ..redis_client import get_redis
+from ..services import anomaly_service
 from ..services.detection_service import save_detection
 from ..services.realtime import publish_detection
 from ..services.serializers import detection_to_dict
+from ..timeutil import isoformat
 
 log = logging.getLogger(__name__)
 DETECT_TASK = "citysight.detect_latest_frame"
@@ -51,13 +58,25 @@ def detect_latest_frame(camera_id: int) -> dict | None:
             log.warning("Camera %s: dropped stale frame (%.1fs old)", camera_id, frame.age)
             return None
 
-        counts = get_detector(config).detect(decode_jpeg(frame.jpeg))
+        counts, boxes = get_detector(config).detect_with_boxes(decode_jpeg(frame.jpeg))
         captured_at = datetime.fromtimestamp(frame.captured_at, tz=timezone.utc)
-        detection = save_detection(camera_id, captured_at, counts)
+        save_interval = config["DETECTION_SAVE_INTERVAL_SECONDS"]
+        if not _claim_save_slot(client, camera_id, frame.captured_at, save_interval):
+            event = _live_event(camera_id, captured_at, counts)
+            live_frame.publish(client, camera_id, frame.jpeg, event, boxes)
+            publish_detection(client, event)
+            return event
+        try:
+            detection = save_detection(camera_id, captured_at, counts)
+        except OperationalError:
+            _release_save_slot(client, camera_id, frame.captured_at, save_interval)  # next frame retries
+            raise
         if detection is None:  # same frame already stored (retry)
             return None
-        event = detection_to_dict(detection)
+        event = {**detection_to_dict(detection), "stored": True}
+        live_frame.publish(client, camera_id, frame.jpeg, event, boxes)
         publish_detection(client, event)
+        _check_density(camera_id, detection, frame.jpeg)
         try:
             client.hset(camera_state.state_key(camera_id), mapping={"last_inference_error": ""})
         except redis.RedisError:
@@ -86,6 +105,57 @@ def detect_latest_frame(camera_id: int) -> dict | None:
         except redis.RedisError:
             pass
     return None
+
+
+def _claim_save_slot(client, camera_id: int, captured_at: float, interval: float) -> bool:
+    """True for the first frame of this camera in its time bucket (atomic across workers).
+
+    If Redis cannot answer, the frame is stored: a few extra rows are better
+    than a gap in the history.
+    """
+    if interval <= 0:
+        return True
+    try:
+        return bool(client.set(_save_key(camera_id, captured_at, interval), 1, nx=True, ex=int(interval * 2) + 1))
+    except redis.RedisError:
+        return True
+
+
+def _release_save_slot(client, camera_id: int, captured_at: float, interval: float) -> None:
+    if interval <= 0:
+        return
+    try:
+        client.delete(_save_key(camera_id, captured_at, interval))
+    except redis.RedisError:
+        pass
+
+
+def _save_key(camera_id: int, captured_at: float, interval: float) -> str:
+    return f"camera:saved:{camera_id}:{int(captured_at // interval)}"
+
+
+def _live_event(camera_id: int, captured_at: datetime, counts) -> dict:
+    """Same shape as a stored detection, for frames that are only shown live."""
+    return {
+        "id": None,
+        "camera_id": camera_id,
+        "timestamp": isoformat(captured_at),
+        "car_count": counts.car,
+        "motorcycle_count": counts.motorcycle,
+        "bus_count": counts.bus,
+        "truck_count": counts.truck,
+        "total_vehicle": counts.total,
+        "stored": False,
+    }
+
+
+def _check_density(camera_id: int, detection, jpeg: bytes) -> None:
+    """The detection is already stored; an anomaly failure must not undo it."""
+    try:
+        anomaly_service.evaluate_density(camera_id, detection.timestamp, detection.total_vehicle, jpeg)
+    except Exception:  # noqa: BLE001
+        db.session.rollback()
+        log.exception("Camera %s: anomaly check failed", camera_id)
 
 
 def _record_inference_error(client, camera_id: int, message: str) -> None:

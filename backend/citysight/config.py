@@ -73,6 +73,9 @@ class Config:
     # --- Video pipeline (proposal Bab 5.2.1 c/d, Tabel 20) ---------------
     MAX_ACTIVE_CAMERAS = _int("MAX_ACTIVE_CAMERAS", 3)
     FRAME_INTERVAL_SECONDS = _float("FRAME_INTERVAL_SECONDS", 0.2)
+    # Every captured frame is detected and shown live; only the first frame of
+    # each interval per camera is stored (advisor: one row per minute). 0 = all.
+    DETECTION_SAVE_INTERVAL_SECONDS = _float("DETECTION_SAVE_INTERVAL_SECONDS", 60)
     FRAME_QUEUE_MAX = _int("FRAME_QUEUE_MAX", 10)
     FRAME_MAX_AGE_SECONDS = _float("FRAME_MAX_AGE_SECONDS", 5.0)
     JPEG_QUALITY = _int("JPEG_QUALITY", 80)
@@ -115,6 +118,22 @@ class Config:
     HOURLY_AGGREGATION_MINUTE = _int("HOURLY_AGGREGATION_MINUTE", 5)
     HOURLY_AGGREGATION_LOOKBACK_HOURS = _int("HOURLY_AGGREGATION_LOOKBACK_HOURS", 2)
 
+    # --- Anomaly indications (docs/DECISIONS.md section 8) ---------------
+    # high_density: every frame in the last WINDOW minutes (at least MIN_FRAMES
+    # frames) shows >= max(MIN_VEHICLES, RATIO x usual vehicles per frame).
+    # "Usual" is the median of hourly_stats.avg_vehicle over BASELINE_DAYS,
+    # same hour of day if there are enough hours, otherwise all hours.
+    ANOMALY_DENSITY_RATIO = _float("ANOMALY_DENSITY_RATIO", 2.0)
+    ANOMALY_DENSITY_MIN_VEHICLES = _int("ANOMALY_DENSITY_MIN_VEHICLES", 15)
+    ANOMALY_DENSITY_WINDOW_MINUTES = _float("ANOMALY_DENSITY_WINDOW_MINUTES", 4)
+    ANOMALY_DENSITY_MIN_FRAMES = _int("ANOMALY_DENSITY_MIN_FRAMES", 3)
+    ANOMALY_BASELINE_DAYS = _int("ANOMALY_BASELINE_DAYS", 14)
+    # camera_offline: an active camera has no processed frame for this long.
+    ANOMALY_OFFLINE_MINUTES = _float("ANOMALY_OFFLINE_MINUTES", 5)
+    # Optional Telegram alert when an anomaly starts or ends; empty = off.
+    TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
+    TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
+
     # --- Logging ---------------------------------------------------------
     LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
     LOG_DIR = os.getenv("LOG_DIR", "")
@@ -141,6 +160,9 @@ class TestingConfig(Config):
     LOGIN_MAX_ATTEMPTS = 5
     BCRYPT_ROUNDS = 4  # speed only; production default stays 12
     ALLOW_FILE_SOURCES = True
+    TELEGRAM_BOT_TOKEN = ""
+    TELEGRAM_CHAT_ID = ""
+    DETECTION_SAVE_INTERVAL_SECONDS = 0  # existing tests expect one row per frame
 
 
 CONFIGS = {
@@ -175,8 +197,16 @@ def validate_config(config: dict) -> None:
         raise RuntimeError("FRAME_QUEUE_MAX must be >= 1.")
     if config["FRAME_INTERVAL_SECONDS"] <= 0:
         raise RuntimeError("FRAME_INTERVAL_SECONDS must be > 0.")
+    if config["DETECTION_SAVE_INTERVAL_SECONDS"] < 0:
+        raise RuntimeError("DETECTION_SAVE_INTERVAL_SECONDS must be >= 0.")
     if "*" in config["FRONTEND_ORIGINS"]:
         raise RuntimeError("FRONTEND_ORIGINS must list explicit origins, not '*'.")
+    if config["ANOMALY_DENSITY_RATIO"] <= 1 or config["ANOMALY_DENSITY_MIN_FRAMES"] < 1:
+        raise RuntimeError("ANOMALY_DENSITY_RATIO must be > 1 and ANOMALY_DENSITY_MIN_FRAMES >= 1.")
+    if config["ANOMALY_DENSITY_WINDOW_MINUTES"] <= 0 or config["ANOMALY_OFFLINE_MINUTES"] <= 0:
+        raise RuntimeError("ANOMALY_DENSITY_WINDOW_MINUTES and ANOMALY_OFFLINE_MINUTES must be > 0.")
+    if bool(config["TELEGRAM_BOT_TOKEN"]) != bool(config["TELEGRAM_CHAT_ID"]):
+        raise RuntimeError("Set TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID together, or leave both empty.")
     required = {"car", "motorcycle", "bus", "truck"}
     if set(config["YOLO_CLASS_NAMES"]) != required:
         raise RuntimeError(f"YOLO_CLASS_NAMES must define exactly {sorted(required)}.")

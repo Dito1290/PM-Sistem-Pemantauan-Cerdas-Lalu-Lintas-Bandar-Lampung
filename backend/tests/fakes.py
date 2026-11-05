@@ -15,6 +15,8 @@ class _Boxes:
     def __init__(self, detections):
         self.cls = _List(cls for cls, _ in detections)
         self.conf = _List(conf for _, conf in detections)
+        # One fixed box per detection, relative to the frame like Ultralytics' xyxyn.
+        self.xyxyn = _List([0.1 * i, 0.2, 0.1 * i + 0.05, 0.3] for i in range(len(detections)))
 
     def __len__(self):
         return len(self.cls)

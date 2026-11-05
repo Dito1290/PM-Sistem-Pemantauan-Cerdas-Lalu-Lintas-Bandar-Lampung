@@ -37,6 +37,7 @@ def init_celery(app: Flask) -> Celery:
         task_routes={
             "citysight.detect_latest_frame": {"queue": "detection"},
             "citysight.aggregate_hourly_stats": {"queue": "stats"},
+            "citysight.check_anomalies": {"queue": "stats"},
         },
         beat_schedule={
             "aggregate-hourly-stats": {
@@ -44,12 +45,17 @@ def init_celery(app: Flask) -> Celery:
                 "schedule": crontab(minute=app.config["HOURLY_AGGREGATION_MINUTE"]),
                 "options": {"queue": "stats", "expires": 3000},
             },
+            "check-anomalies": {
+                "task": "citysight.check_anomalies",
+                "schedule": crontab(),  # every minute
+                "options": {"queue": "stats", "expires": 50},
+            },
         },
         broker_connection_retry_on_startup=True,
     )
     celery.set_default()
     app.extensions["celery"] = celery
-    from .tasks import detection, stats  # noqa: F401  (register tasks)
+    from .tasks import anomaly, detection, stats  # noqa: F401  (register tasks)
 
     return celery
 

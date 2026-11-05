@@ -77,6 +77,11 @@ class VehicleDetector:
         log.info("Detector ready; class map %s, conf=%.2f iou=%.2f", self.class_map, confidence, iou)
 
     def detect(self, frame) -> VehicleCounts:
+        return self.detect_with_boxes(frame)[0]
+
+    def detect_with_boxes(self, frame) -> tuple[VehicleCounts, list[dict]]:
+        """Counts plus the counted boxes, as {"category", "conf", "box": [x1, y1, x2, y2]}
+        with coordinates relative to the frame (0..1), for the live view."""
         kwargs = dict(
             conf=self.confidence,
             iou=self.iou,
@@ -89,16 +94,21 @@ class VehicleDetector:
             kwargs["device"] = self.device
         result = self.model.predict(frame, **kwargs)[0]
         counts = dict.fromkeys(CATEGORIES, 0)
+        found: list[dict] = []
         boxes = result.boxes
         if boxes is not None and len(boxes):
             class_ids = boxes.cls.tolist()
             scores = boxes.conf.tolist()
-            for class_id, score in zip(class_ids, scores):
+            xyxyn = boxes.xyxyn.tolist() if getattr(boxes, "xyxyn", None) is not None else [None] * len(class_ids)
+            for class_id, score, xy in zip(class_ids, scores, xyxyn):
                 category = self.class_map.get(int(class_id))
                 # predict() already applies conf; re-check in case a backend ignores it.
                 if category and score >= self.confidence:
                     counts[category] += 1
-        return VehicleCounts(**counts)
+                    if xy is not None:
+                        found.append({"category": category, "conf": round(float(score), 3),
+                                      "box": [round(float(v), 4) for v in xy]})
+        return VehicleCounts(**counts), found
 
 
 _override: VehicleDetector | None = None

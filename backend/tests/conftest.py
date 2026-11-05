@@ -42,7 +42,7 @@ def app():
 def _clean(app):
     with app.app_context():
         db.session.execute(text(
-            "TRUNCATE hourly_stats, detections, cameras, users RESTART IDENTITY CASCADE"
+            "TRUNCATE anomalies, hourly_stats, detections, cameras, users RESTART IDENTITY CASCADE"
         ))
         db.session.commit()
         get_redis(app.config["REDIS_URL"]).flushdb()

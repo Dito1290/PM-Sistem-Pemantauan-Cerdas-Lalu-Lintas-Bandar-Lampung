@@ -136,3 +136,59 @@ Catatan:
 3. Hitungan tetap berarti "kendaraan yang terlihat di satu gambar". Satu gambar per menit adalah sampel, bukan jumlah kendaraan yang lewat dalam satu menit.
 4. Jumlah baris per hari yang jauh lebih kecil memudahkan pemakaian basis data cloud (lihat rancangan arsitektur cloud).
 
+
+## 8. Indikasi anomali (2026-11-05)
+
+Dengan satu gambar per menit, kendaraan tidak bisa dilacak dan kejadian seperti tabrakan (beberapa detik) hampir pasti terlewat. Model YOLO juga hanya mengenal benda, bukan kejadian. Karena itu backend tidak mendeteksi "kecelakaan", tetapi **indikasi anomali** dari akibatnya. Operator yang memastikan lewat CCTV.
+
+| Jenis (`type`) | Aturan | Kemungkinan artinya |
+|---|---|---|
+| `high_density` | Semua gambar dalam 4 menit terakhir (minimal 3 gambar) berisi kendaraan sebanyak minimal `max(15, 2 x biasanya)`. Indikasi selesai bila semua gambar dalam 4 menit terakhir di bawah ambang yang memicunya. | Macet, kecelakaan, acara, jalan ditutup |
+| `camera_offline` | Kamera aktif tidak punya gambar yang terdeteksi selama 5 menit. Penyebab dibaca dari status stream di Redis (ingest mati, sumber CCTV gagal dibuka, atau worker gagal). Selesai saat gambar masuk lagi. | Kamera atau server Seribu Wajah mati, layanan CitySight mati |
+
+"Biasanya" adalah median `hourly_stats.avg_vehicle` kamera itu selama 14 hari terakhir pada jam yang sama (WIB). Bila jam yang sama belum punya minimal 3 jam data, dipakai median semua jam. Bila keduanya kurang dari 3 jam data, `high_density` tidak dicek. Jam yang sedang berjalan tidak ikut dihitung, supaya kemacetan yang sedang terjadi tidak menaikkan ambangnya sendiri. Semua angka bisa diubah lewat `ANOMALY_*` di `.env`.
+
+Pengecekan:
+
+1. `high_density` dicek worker setelah setiap gambar tersimpan. Gagalnya pengecekan tidak membatalkan hasil deteksi.
+2. `camera_offline` dicek Celery Beat setiap menit (`citysight.check_anomalies`, antrean `stats`). Selama 5 menit pertama setelah worker menyala, pengecekan hanya menutup indikasi, karena kamera belum sempat mengirim gambar. Kamera yang dinonaktifkan atau dihapus menutup indikasinya.
+3. Hanya ada satu indikasi aktif per kamera per jenis (indeks unik `uq_anomalies_active`).
+
+Peringatan dikirim ke `GET /api/anomalies`, ke stream SSE (`event: anomaly`), dan ke Telegram bila `TELEGRAM_BOT_TOKEN` dan `TELEGRAM_CHAT_ID` diisi. Untuk `high_density`, Telegram juga menerima foto gambar yang memicunya.
+
+Batasan:
+
+1. `hourly_stats` hanya terisi bila Celery Beat berjalan, atau diisi manual dengan `flask --app wsgi stats aggregate --from ... --to ...`. Tanpa itu, `high_density` tidak punya pembanding.
+2. Hitungan "kendaraan terlihat" masih termasuk motor parkir dan penjemput (lihat bagian 6), dan kamera PTZ yang berputar atau zoom mengubah jumlah kendaraan yang terlihat. Keduanya bisa memicu `high_density` palsu.
+3. Ambang 2x dan minimal 15 kendaraan adalah tebakan awal dari data 2 November, belum diuji pada kejadian nyata.
+
+## 9. Stream tetap berjalan, penyimpanan tetap satu baris per menit (2026-11-05)
+
+Bagian 7 ternyata salah tafsir: yang dimaksud satu per menit adalah **penyimpanan** ke PostgreSQL, bukan pengambilan gambar. Dengan mode satu gambar, monitor Seribu Wajah ditutup di antara gambar, sehingga tidak ada tampilan langsung dan kejadian di antara dua gambar tidak terlihat.
+
+Sekarang:
+
+| | Bagian 7 | Sekarang |
+|---|---|---|
+| `FRAME_INTERVAL_SECONDS` | 60 (mode satu gambar) | **0,2** (monitor terbuka terus, target 5 gambar per detik) |
+| Deteksi YOLO | 1 per menit | **Setiap gambar yang diambil** |
+| SSE `event: detection` | 1 per menit | Setiap gambar, dengan `"stored": true/false` |
+| Baris `detections` | 1 per kamera per menit | **Tetap 1 per kamera per menit** (`DETECTION_SAVE_INTERVAL_SECONDS=60`) |
+
+Yang disimpan adalah gambar pertama yang terdeteksi pada setiap menit jam dinding per kamera (kunci Redis `camera:saved:<id>:<menit>`, atomik bila worker lebih dari satu). Arti hitungan tidak berubah: kendaraan yang terlihat di satu gambar. Statistik per jam dan indikasi anomali (bagian 8) tetap memakai baris yang tersimpan. Bila penyimpanan gagal karena basis data, kunci dilepas supaya gambar berikutnya di menit yang sama dicoba lagi.
+
+Akibatnya beban kembali seperti 5 gambar per detik: worker perlu GPU untuk YOLO26m 960 (bagian 6). Di CPU (sekitar 480 ms per gambar) hanya sekitar 2 gambar per detik untuk satu kamera, sehingga rancangan VM cloud tanpa GPU perlu ditinjau ulang. Mode satu gambar tetap tersedia dengan `FRAME_INTERVAL_SECONDS` 30 atau lebih.
+
+Hasil ukur 3 kamera sekaligus (2026-11-05 sekitar 15.45, YOLO26m 960 di GPU RTX 3050, 40 detik):
+
+| Kamera | Diambil dari stream | Dideteksi, worker `--pool=solo` | Dideteksi, worker `--pool=threads --concurrency 3` |
+|---|---|---|---|
+| 1 | 4,3-4,6 fps | 2,7 fps | 3,9 fps |
+| 2 | 3,9-4,1 fps | 2,6 fps | 4,0 fps |
+| 3 | 4,9-5,0 fps | 2,7 fps | 4,3 fps |
+
+Dengan satu thread, worker mengerjakan frame ketiga kamera bergantian (sekitar 8 frame per detik total), sehingga menjadi batas. Dengan 3 thread (satu model YOLO per thread, VRAM sekitar 1,4 GB), deteksi hampir menyamai kecepatan pemutar web Seribu Wajah, yang kini menjadi batasnya. Setiap kamera tetap menyimpan satu baris per menit. Beban CPU laptop 86-91%, sebagian besar karena tiga Chrome memutar video 1080p dan aplikasi lain. Jalankan worker dengan:
+
+    celery -A celery_worker.celery worker -Q detection,stats --pool=threads --concurrency 3 -l info
+
+Tampilan langsung: setelah setiap deteksi, worker menimpa hash Redis `camera:live:<id>` (berlaku 30 detik) berisi JPEG gambar itu dan kotak yang ia hitung (`category`, `conf`, `box` [x1, y1, x2, y2] relatif 0..1, lihat `pipeline/live_frame.py`). Penampil cukup menggambar kotak itu tanpa menjalankan YOLO kedua, sehingga kotak di layar sama persis dengan yang dihitung. Dengan penampil terbuka, deteksi tetap 3,6-4,0 fps per kamera untuk 3 kamera (sebelumnya turun ke sekitar 2,7 fps karena penampil menjalankan YOLO sendiri). Data yang sama bisa dipakai untuk tampilan live di dashboard.

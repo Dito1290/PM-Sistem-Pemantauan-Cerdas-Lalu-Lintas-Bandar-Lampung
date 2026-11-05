@@ -40,7 +40,7 @@ def create_app(config_name: str | None = None, overrides: dict | None = None) ->
     )
 
     from . import models  # noqa: F401  (register models for migrations)
-    from .api import cameras, health, stats, stream
+    from .api import anomalies, cameras, health, stats, stream
     from .auth import routes as auth_routes
     from .auth.tokens import init_jwt
     from .celery_app import init_celery
@@ -48,7 +48,7 @@ def create_app(config_name: str | None = None, overrides: dict | None = None) ->
     from .errors import register_error_handlers
 
     init_jwt(app)
-    for blueprint in (auth_routes.bp, cameras.bp, stats.bp, stream.bp, health.bp):
+    for blueprint in (auth_routes.bp, cameras.bp, stats.bp, stream.bp, anomalies.bp, health.bp):
         app.register_blueprint(blueprint)
     register_error_handlers(app)
     register_cli(app)

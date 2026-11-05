@@ -1,5 +1,8 @@
 """GET /api/stream/detections - Server-Sent Events for live dashboard tiles.
 
+Sends ``event: detection`` for every stored frame and ``event: anomaly`` when
+an anomaly indication starts or ends (filtered by ``camera_id`` too).
+
 Browsers' EventSource cannot send headers, so this endpoint (and only this
 one) also accepts the JWT as ``?access_token=``. Use HTTPS in deployment.
 """
