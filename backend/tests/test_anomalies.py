@@ -302,3 +302,20 @@ def test_sse_streams_anomaly_events(client, redis_client, tokens, make_camera):
     body = b"".join(res.response).decode()
     assert "event: anomaly" in body and "id: anomaly-2-started" in body
     assert "anomaly-1-" not in body
+
+
+def test_density_left_open_across_a_gap_is_closed(app, make_camera, events):
+    # The pipeline was stopped while a density indication was active (2026-11-05:
+    # a test-threshold indication survived the night and stayed open the next day).
+    cam = make_camera()
+    _baseline(app, cam, 10.0, _same_hour_days(3))
+    for minute in range(3):
+        _frame(app, cam, T + timedelta(minutes=minute), 25)
+    assert _anomalies(app) == [(cam, "high_density", True)]
+
+    next_day = T + timedelta(hours=20)
+    changes = _frame(app, cam, next_day, 25)
+    assert [(e["change"], e["details"].get("end_reason")) for e in changes] == [
+        ("ended", "Pemantauan sempat terhenti, indikasi ditutup.")]
+    assert changes[0]["ended_at"] == isoformat(T + timedelta(minutes=2))  # last frame before the gap
+    assert _anomalies(app) == [(cam, "high_density", False)]  # one frame after the gap is not enough

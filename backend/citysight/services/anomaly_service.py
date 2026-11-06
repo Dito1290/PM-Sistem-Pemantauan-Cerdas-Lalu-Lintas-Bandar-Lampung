@@ -47,6 +47,10 @@ _WINDOW = text("""
     WHERE camera_id = :camera_id AND timestamp > :since AND timestamp <= :until
 """)
 
+_PREVIOUS_FRAME = text("""
+    SELECT max(timestamp) FROM detections WHERE camera_id = :camera_id AND timestamp < :until
+""")
+
 _LAST_FRAME = text("""
     SELECT c.id AS camera_id, d.timestamp
     FROM unnest(CAST(:ids AS integer[])) AS c(id)
@@ -87,10 +91,19 @@ def evaluate_density(camera_id: int, frame_at: datetime, total_vehicle: int,
                      photo_jpeg: bytes | None = None) -> list[dict]:
     """Run after each stored detection. Returns the anomaly events it emitted."""
     config = current_app.config
+    span = timedelta(minutes=config["ANOMALY_DENSITY_WINDOW_MINUTES"])
+    events: list[dict] = []
     active = _active(camera_id, ANOMALY_HIGH_DENSITY)
+    if active is not None:
+        # After a gap longer than the window (system or camera was off) the old
+        # indication says nothing about now; close it and judge the road afresh.
+        previous = db.session.execute(_PREVIOUS_FRAME, {"camera_id": camera_id, "until": frame_at}).scalar()
+        if previous is None or frame_at - previous > span:
+            events += _end(active, previous or active.started_at,
+                           reason="Pemantauan sempat terhenti, indikasi ditutup.")
+            active = None
     window = db.session.execute(_WINDOW, {
-        "camera_id": camera_id, "until": frame_at,
-        "since": frame_at - timedelta(minutes=config["ANOMALY_DENSITY_WINDOW_MINUTES"]),
+        "camera_id": camera_id, "until": frame_at, "since": frame_at - span,
     }).mappings().one()
     enough_frames = window["frames"] >= config["ANOMALY_DENSITY_MIN_FRAMES"]
 
@@ -106,11 +119,11 @@ def evaluate_density(camera_id: int, frame_at: datetime, total_vehicle: int,
 
     baseline = density_baseline(camera_id, frame_at)
     if baseline is None:
-        return []
+        return events
     usual, scope = baseline
     threshold = density_threshold(usual)
     if not (enough_frames and window["low"] >= threshold):
-        return []
+        return events
     seen = f"{window['low']}" if window["low"] == window["high"] else f"{window['low']}-{window['high']}"
     message = (f"Kepadatan tidak wajar: {seen} kendaraan per gambar selama "
                f"{window['frames']} gambar berturut-turut, biasanya sekitar {usual:.0f}. "
@@ -122,7 +135,7 @@ def evaluate_density(camera_id: int, frame_at: datetime, total_vehicle: int,
         "peak_vehicle": int(window["high"]),
         "frames": int(window["frames"]),
     }
-    return _start(camera_id, ANOMALY_HIGH_DENSITY, window["first_at"], message, details, photo_jpeg)
+    return events + _start(camera_id, ANOMALY_HIGH_DENSITY, window["first_at"], message, details, photo_jpeg)
 
 
 # --- camera_offline -----------------------------------------------------------
