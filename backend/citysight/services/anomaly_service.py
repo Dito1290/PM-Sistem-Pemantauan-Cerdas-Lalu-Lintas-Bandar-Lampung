@@ -305,7 +305,7 @@ def _offline_cause(state: dict) -> str:
 # --- shared -------------------------------------------------------------------
 
 def list_anomalies(*, status: str | None, camera_id: int | None, type_: str | None,
-                   page: int, per_page: int) -> tuple[list[tuple[Anomaly, str]], int]:
+                   page: int, per_page: int, review: str | None = None) -> tuple[list[tuple[Anomaly, str]], int]:
     query = select(Anomaly, Camera.name).join(Camera, Camera.id == Anomaly.camera_id)
     if status == "active":
         query = query.where(Anomaly.ended_at.is_(None))
@@ -315,6 +315,10 @@ def list_anomalies(*, status: str | None, camera_id: int | None, type_: str | No
         query = query.where(Anomaly.camera_id == camera_id)
     if type_ is not None:
         query = query.where(Anomaly.type == type_)
+    if review == "pending":
+        query = query.where(Anomaly.review_verdict.is_(None))
+    elif review in ("true", "false"):
+        query = query.where(Anomaly.review_verdict == review)
     total = db.session.scalar(select(db.func.count()).select_from(query.subquery()))
     rows = db.session.execute(
         query.order_by(Anomaly.started_at.desc(), Anomaly.id.desc()).limit(per_page).offset((page - 1) * per_page)
@@ -339,9 +343,64 @@ def _start(camera_id: int, type_: str, started_at: datetime, message: str, detai
     db.session.commit()
     if new_id is None:  # another task opened it first
         return []
+    if photo_jpeg:
+        _save_photo(new_id, photo_jpeg)
     anomaly = db.session.get(Anomaly, new_id)
     log.warning("Camera %s: anomaly %s started: %s", camera_id, type_, message)
     return [_announce(anomaly, "started", photo_jpeg)]
+
+
+# --- photos and operator review ---------------------------------------------------
+
+def photo_path(anomaly_id: int):
+    """Where the photo of an anomaly is kept (ANOMALY_PHOTO_DIR), or None if photos are off."""
+    from pathlib import Path
+
+    folder = current_app.config.get("ANOMALY_PHOTO_DIR")
+    return Path(folder) / f"{anomaly_id}.jpg" if folder else None
+
+
+def _save_photo(anomaly_id: int, jpeg: bytes) -> None:
+    path = photo_path(anomaly_id)
+    if path is None:
+        return
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(jpeg)
+    except OSError as exc:  # the alert itself matters more than its photo
+        log.warning("Cannot store photo of anomaly %s: %s", anomaly_id, exc)
+
+
+def review(anomaly_id: int, verdict: str, note: str | None, reviewer: str) -> dict:
+    """Store the operator's verdict ("true" = real indication, "false" = false alarm).
+    A later review replaces an earlier one."""
+    from ..errors import NotFound
+
+    anomaly = db.session.get(Anomaly, anomaly_id)
+    if anomaly is None:
+        raise NotFound("Anomali tidak ditemukan.")
+    anomaly.review_verdict, anomaly.review_note = verdict, (note or None)
+    anomaly.reviewed_by, anomaly.reviewed_at = reviewer, utcnow()
+    db.session.commit()
+    return _announce(anomaly, "reviewed", notify=False)
+
+
+def review_summary(start: datetime, end: datetime) -> list[dict]:
+    """Per camera and type: alerts, how many were reviewed, how many were right."""
+    rows = db.session.execute(text("""
+        SELECT a.camera_id, c.name AS camera_name, a.type,
+               count(*) AS alerts,
+               count(a.review_verdict) AS reviewed,
+               count(*) FILTER (WHERE a.review_verdict = 'true') AS correct
+        FROM anomalies a JOIN cameras c ON c.id = a.camera_id
+        WHERE a.started_at >= :start AND a.started_at < :end
+        GROUP BY a.camera_id, c.name, a.type
+        ORDER BY a.camera_id, a.type
+    """), {"start": start, "end": end}).mappings()
+    return [
+        {**row, "precision": round(row["correct"] / row["reviewed"], 3) if row["reviewed"] else None}
+        for row in rows
+    ]
 
 
 def _end(anomaly: Anomaly, ended_at: datetime, reason: str) -> list[dict]:
@@ -352,12 +411,12 @@ def _end(anomaly: Anomaly, ended_at: datetime, reason: str) -> list[dict]:
     return [_announce(anomaly, "ended")]
 
 
-def _announce(anomaly: Anomaly, change: str, photo_jpeg: bytes | None = None) -> dict:
+def _announce(anomaly: Anomaly, change: str, photo_jpeg: bytes | None = None, *, notify: bool = True) -> dict:
     camera = db.session.get(Camera, anomaly.camera_id)
     event = {"change": change, **anomaly_to_dict(anomaly, camera.name if camera else None)}
     config = current_app.config
     publish_anomaly(get_redis(config["REDIS_URL"]), event)
-    if notifier.telegram_enabled(config):
+    if notify and notifier.telegram_enabled(config):
         notifier.send_telegram(config, _telegram_text(anomaly, camera, change), photo_jpeg)
     return event
 

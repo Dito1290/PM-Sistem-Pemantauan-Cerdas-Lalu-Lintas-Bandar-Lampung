@@ -168,9 +168,11 @@ def _check_stopped(config, camera_id: int, captured_at: datetime, boxes: list[di
         zone = zones.get(camera_id)
         if zone is None:
             return
-        disabled = zones.disabled(camera_id)
+        from zoneinfo import ZoneInfo
+
+        disabled = zones.disabled(camera_id, captured_at.astimezone(ZoneInfo(config["REPORT_TIMEZONE"])).time())
         t = captured_at.timestamp()
-        vehicles = [b for b in boxes if b["category"] != "person"]
+        vehicles = [b for b in boxes if b["category"] not in ("person", "bicycle")]
         min_height = config["ANOMALY_MIN_BOX_HEIGHT"]
         if "stopped_vehicle" not in disabled:
             monitor, created = stopped_vehicle.monitor_for(camera_id, config["ANOMALY_STOPPED_SECONDS"], min_height)

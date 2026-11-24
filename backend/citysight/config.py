@@ -137,6 +137,9 @@ class Config:
     # cameras without a zone are not checked.
     ANOMALY_STOPPED_SECONDS = _float("ANOMALY_STOPPED_SECONDS", 120)
     ANOMALY_ZONES_FILE = os.getenv("ANOMALY_ZONES_FILE", "zones.json")
+    # Photo of each indication (red boxes), served at /api/anomalies/<id>/photo
+    # for the operator's review. Empty = do not keep photos.
+    ANOMALY_PHOTO_DIR = os.getenv("ANOMALY_PHOTO_DIR", "data/anomaly_photos")
     # people_on_road: at least MIN people (not riding a vehicle) stay around one
     # spot inside the road zone for SECONDS (crossings and passers-by move on). Needs YOLO_PERSON_CLASS and a zone for the camera.
     ANOMALY_PEOPLE_MIN = _int("ANOMALY_PEOPLE_MIN", 3)
@@ -180,6 +183,7 @@ class TestingConfig(Config):
     TELEGRAM_CHAT_ID = ""
     DETECTION_SAVE_INTERVAL_SECONDS = 0  # existing tests expect one row per frame
     ANOMALY_ZONES_FILE = ""  # no zones unless a test sets a file
+    ANOMALY_PHOTO_DIR = ""  # no photos unless a test sets a folder
 
 
 CONFIGS = {

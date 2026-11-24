@@ -65,6 +65,10 @@ def resolve_class_ids(model_names: dict[int, str] | list[str], wanted: dict[str,
 
 
 PERSON = "person"
+BICYCLE = "bicycle"
+# Helper labels: detected and returned as boxes, never counted as vehicles.
+# Bicycles let cyclists be recognised as riders (people_on_road), 2026-11-24.
+HELPERS = (PERSON, BICYCLE)
 
 
 def _iou(a: list[float], b: list[float]) -> float:
@@ -98,8 +102,11 @@ class VehicleDetector:
         self.device = device
         self.agnostic_nms = agnostic_nms
         self.person_id = self._person_id(model.names, person_label)
-        log.info("Detector ready; class map %s, person id %s, conf=%.2f iou=%.2f",
-                 self.class_map, self.person_id, confidence, iou)
+        # With people on, bicycles are detected too so that cyclists count as riders.
+        bicycle_id = self._person_id(model.names, BICYCLE) if self.person_id is not None else None
+        self.helper_ids = {i: c for i, c in ((self.person_id, PERSON), (bicycle_id, BICYCLE)) if i is not None}
+        log.info("Detector ready; class map %s, helper labels %s, conf=%.2f iou=%.2f",
+                 self.class_map, self.helper_ids, confidence, iou)
 
     @staticmethod
     def _person_id(model_names, label: str | None) -> int | None:
@@ -125,7 +132,7 @@ class VehicleDetector:
         the class-agnostic step is applied here to the vehicle boxes only.
         """
         with_people = self.person_id is not None
-        classes = sorted(self.class_map) + ([self.person_id] if with_people else [])
+        classes = sorted(self.class_map) + sorted(self.helper_ids)
         kwargs = dict(
             conf=self.confidence,
             iou=self.iou,
@@ -149,18 +156,16 @@ class VehicleDetector:
                 # predict() already applies conf; re-check in case a backend ignores it.
                 if score < self.confidence:
                     continue
-                category = self.class_map.get(int(class_id))
-                if category is None and with_people and int(class_id) == self.person_id:
-                    category = PERSON
+                category = self.class_map.get(int(class_id)) or self.helper_ids.get(int(class_id))
                 if category is None:
                     continue
                 if xy is None:
-                    if category != PERSON:
+                    if category not in HELPERS:
                         unplaced.append(category)
                     continue
                 item = {"category": category, "conf": round(float(score), 3),
                         "box": [round(float(v), 4) for v in xy]}
-                (people if category == PERSON else vehicles).append(item)
+                (people if category in HELPERS else vehicles).append(item)
         if with_people and self.agnostic_nms:
             vehicles = agnostic_nms(vehicles, self.iou)
         counts = dict.fromkeys(CATEGORIES, 0)

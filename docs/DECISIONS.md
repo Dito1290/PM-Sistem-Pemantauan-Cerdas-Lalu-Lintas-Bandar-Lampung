@@ -281,3 +281,30 @@ Tambahan (17.20), setelah peringatan palsu "orang di badan jalan" karena rombong
 1. `people_on_road` kini mengikuti setiap orang dari posisi kakinya. Yang dihitung hanya orang yang **bertahan** dalam radius 2 kali tinggi badannya dari posisi pertama, terlihat di minimal 60% frame. Orang yang berjalan terus tidak pernah dihitung.
 2. `ANOMALY_PEOPLE_SECONDS` bawaan dinaikkan dari 10 ke **30 detik**. Rombongan menyeberang dan orang yang bersiap naik motor biasanya selesai dalam 10-20 detik, sedangkan setelah kecelakaan orang bertahan beberapa menit. Akibatnya, potongan video kecelakaan pendek (22-40 detik) di bagian 11 kemungkinan besar tidak lagi memicu peringatan.
 3. Pemeriksaan bisa dimatikan per kamera: `{"<id>": {"areas": [...], "disabled": ["stopped_vehicle"]}}`. Kamera 1 berada dekat pom bensin (bus dan truk antre solar), tempat parkir motor di kedua tepi, dan penjemput SD 2 Rajabasa, sehingga `stopped_vehicle` dimatikan di sana. Kamera 1 tetap memakai `people_on_road`, `high_density`, dan `camera_offline`.
+
+Tambahan (19.20), pengamatan malam:
+
+1. Kamera 2, 18.15 dan 19.16: motor parkir untuk nongkrong di tepi pulau taman. Jalur selebar sekitar satu motor di sepanjang tepi pulau dikeluarkan dari zona. Ditemukan juga bug: area kendaraan dicatat sekali saat pertama terlihat, sehingga setelah zona diubah, skuter yang sudah di luar zona tetap dilaporkan 14 menit. Area kini diperbarui setiap frame.
+2. Kamera 3, 19.19: rombongan pesepeda menunggu di zebra cross terhitung sebagai "orang di badan jalan", karena sepeda tidak dideteksi. Detektor kini juga mendeteksi `bicycle` sebagai label bantu: tidak dihitung sebagai kendaraan dan tidak bisa memicu `stopped_vehicle`, tetapi orang di atas sepeda dianggap pengendara. Hitungan kendaraan pada 49 gambar pembanding tetap sama (126/161/29/29). Pojok zebra cross kanan bawah kamera 3 juga dikeluarkan dari zona.
+
+## 13. Konfirmasi operator, foto peringatan, jadwal per kamera, dan percobaan malam (2026-11-24 malam)
+
+**Konfirmasi operator** (migrasi `0004`): setiap anomali bisa ditandai benar atau salah lewat `POST /api/anomalies/<id>/review`, beserta catatan, peninjau, dan waktu. `GET /api/anomalies/review-summary` menghitung ketepatan (benar / ditinjau) per kamera dan per jenis. Inilah kunci jawaban untuk menilai aturan sekarang dan pemeriksa otomatis (misalnya model AI) nanti. Sebelum tombol di dashboard ada, peninjauan dilakukan dengan `python scripts/tinjau_anomali.py`. Detail API untuk frontend: `docs/API_ANOMALI.md`.
+
+**Foto peringatan**: foto yang diberi kotak merah kini disimpan backend di `ANOMALY_PHOTO_DIR` (bawaan `backend/data/anomaly_photos`, tidak masuk git) dan disajikan di `GET /api/anomalies/<id>/photo`, supaya operator di dashboard bisa menilai.
+
+**Jadwal per kamera**: pemeriksaan bisa dimatikan pada jam tertentu (WIB), misalnya `"disabled_hours": {"stopped_vehicle": ["18:00-06:00"]}`. Kamera 2 (Underpass Unila) memakainya karena malam sampai subuh banyak orang nongkrong dan parkir di sana. `people_on_road` tetap aktif di malam hari, karena malam termasuk jam rawan kecelakaan.
+
+**Percobaan deteksi malam** (15 gambar live dari 3 kamera, sekitar 19.30, YOLO26m):
+
+| Cara | Kendaraan terdeteksi | Motor | ms/gambar* |
+|---|---|---|---|
+| Biasa (conf 0,25, 960) | 111 | 26 | ~150 |
+| CLAHE (kontras lokal) | 116 (+5%) | 29 | 135 |
+| Gamma 0,7 (diterangkan) | 94 (-15%) | 19 | 149 |
+| conf 0,15 | 144 (+30%) | 39 (+50%) | 159 |
+| imgsz 1280 | 118 (+6%) | 39 (+50%) | 224 |
+
+\* GPU dipakai bersama worker yang sedang berjalan.
+
+Tanpa label manual, belum diketahui berapa tambahan deteksi yang benar. Dari pengecekan visual, conf 0,15 menangkap motor yang buram karena bergerak, tetapi juga menambah kotak kecil di kejauhan. imgsz 1280 menambah motor kecil, tetapi lebih lambat dan sempat kehilangan motor buram di dekat kamera. Gamma memperburuk hasil. Belum ada pengaturan yang diubah; keputusannya menunggu pengukuran dengan gambar malam berlabel (bersamaan dengan fine-tuning).

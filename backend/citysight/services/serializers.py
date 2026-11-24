@@ -62,4 +62,18 @@ def anomaly_to_dict(anomaly: Anomaly, camera_name: str | None = None) -> dict:
         "ended_at": isoformat(anomaly.ended_at),
         "message": anomaly.message,
         "details": anomaly.details,
+        "photo_url": f"/api/anomalies/{anomaly.id}/photo" if _has_photo(anomaly.id) else None,
+        "review": None if anomaly.review_verdict is None else {
+            "verdict": anomaly.review_verdict,
+            "note": anomaly.review_note,
+            "by": anomaly.reviewed_by,
+            "at": isoformat(anomaly.reviewed_at),
+        },
     }
+
+
+def _has_photo(anomaly_id: int) -> bool:
+    from .anomaly_service import photo_path
+
+    path = photo_path(anomaly_id)
+    return path is not None and path.is_file()

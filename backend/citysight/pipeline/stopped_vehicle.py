@@ -17,7 +17,9 @@ traffic direction: "other traffic is moving" is then judged within the area of
 the stopped vehicle, so a queue in one direction is not reported because the
 opposite direction flows (seen on camera 1, 2026-11-24). A camera can also
 switch checks off where stopping is normal (fuel queue, parking, school
-pick-up): ``{"<camera_id>": {"areas": [...], "disabled": ["stopped_vehicle"]}}``. A camera
+pick-up): ``{"<camera_id>": {"areas": [...], "disabled": ["stopped_vehicle"]}}``,
+or only at certain local hours: ``"disabled_hours": {"stopped_vehicle": ["18:00-06:00"]}``
+(night-time hangouts with parked motorcycles at camera 2, 2026-11-24). A camera
 without a zone is not checked. PTZ cameras that turn or zoom move the road
 away from the zone; that is a known limitation of this first version.
 
@@ -222,39 +224,60 @@ class Zones:
         self._mtime: float | None = None
         self._zones: dict[int, list[list[float]]] = {}
         self._disabled: dict[int, set[str]] = {}
+        self._hours: dict[int, dict[str, list[tuple[int, int]]]] = {}
 
-    def disabled(self, camera_id: int) -> set[str]:
-        """Checks switched off for this camera (read with the zones)."""
+    def disabled(self, camera_id: int, local_time=None) -> set[str]:
+        """Checks switched off for this camera, always or at ``local_time`` (a datetime.time
+        in REPORT_TIMEZONE). Read with the zones."""
         self.get(camera_id)
-        return self._disabled.get(camera_id, set())
+        off = set(self._disabled.get(camera_id, set()))
+        if local_time is not None:
+            minute = local_time.hour * 60 + local_time.minute
+            for check, spans in self._hours.get(camera_id, {}).items():
+                if any(_in_span(minute, start, end) for start, end in spans):
+                    off.add(check)
+        return off
 
     def get(self, camera_id: int) -> list[list[list[float]]] | None:
         """The camera's areas (list of polygons), or None without a zone."""
         try:
             mtime = os.path.getmtime(self.path)
         except OSError:
-            self._zones, self._disabled, self._mtime = {}, {}, None
+            self._zones, self._disabled, self._hours, self._mtime = {}, {}, {}, None
             return None
         if mtime != self._mtime:
             self._mtime = mtime
             try:
                 with open(self.path, encoding="utf-8") as f:
                     raw = json.load(f)
-                zones, disabled = {}, {}
+                zones, disabled, hours = {}, {}, {}
                 for k, v in raw.items():
                     if isinstance(v, dict):
                         disabled[int(k)] = set(v.get("disabled", []))
+                        hours[int(k)] = {check: [_parse_span(s) for s in spans]
+                                         for check, spans in v.get("disabled_hours", {}).items()}
                         v = v.get("areas", [])
                     areas = [[[float(x), float(y)] for x, y in polygon]
                              for polygon in as_areas(v) if len(polygon) >= 3]
                     if areas:
                         zones[int(k)] = areas
-                self._zones, self._disabled = zones, disabled
+                self._zones, self._disabled, self._hours = zones, disabled, hours
                 log.info("Loaded road zones for camera(s) %s from %s", sorted(self._zones), self.path)
             except (OSError, ValueError, TypeError) as exc:
                 log.error("Cannot read road zones %s: %s", self.path, exc)
                 self._zones = {}
         return self._zones.get(camera_id)
+
+
+def _parse_span(text_: str) -> tuple[int, int]:
+    """"18:00-06:00" -> (1080, 360) minutes; the span may run past midnight."""
+    start, end = (part.strip() for part in text_.split("-"))
+    to_min = lambda hhmm: int(hhmm.split(":")[0]) * 60 + int(hhmm.split(":")[1])  # noqa: E731
+    return to_min(start), to_min(end)
+
+
+def _in_span(minute: int, start: int, end: int) -> bool:
+    return start <= minute < end if start <= end else minute >= start or minute < end
 
 
 _monitors: dict[int, StoppedVehicleMonitor] = {}

@@ -140,6 +140,19 @@ class AnomalyQuery(Pagination):
     status: Literal["active", "ended"] | None = None
     camera_id: int | None = Field(default=None, ge=1)
     type: Literal["high_density", "camera_offline", "stopped_vehicle", "people_on_road"] | None = None
+    review: Literal["pending", "true", "false"] | None = None
+
+
+class ReviewIn(_In):
+    verdict: Literal["true", "false"]
+    note: str | None = Field(default=None, max_length=500)
+
+
+class ReviewSummaryQuery(_In):
+    from_: date | None = Field(default=None, alias="from")
+    to: date | None = None
+
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
 
 def parse_body(schema: type[T]) -> T:

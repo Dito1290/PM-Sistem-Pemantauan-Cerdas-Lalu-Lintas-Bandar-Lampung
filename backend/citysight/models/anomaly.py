@@ -35,6 +35,7 @@ class Anomaly(db.Model):
     __table_args__ = (
         CheckConstraint("type IN ('high_density', 'camera_offline', 'stopped_vehicle', 'people_on_road')", name="type_valid"),
         CheckConstraint("ended_at IS NULL OR ended_at >= started_at", name="ended_after_start"),
+        CheckConstraint("review_verdict IS NULL OR review_verdict IN ('true', 'false')", name="review_valid"),
         Index("uq_anomalies_active", "camera_id", "type", unique=True,
               postgresql_where=text("ended_at IS NULL")),
         Index("ix_anomalies_started_at", "started_at"),
@@ -49,6 +50,12 @@ class Anomaly(db.Model):
     ended_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     message: Mapped[str] = mapped_column(Text, nullable=False)
     details: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    # Operator review: was the indication right? Ground truth to measure precision
+    # per camera and type, and later to judge an automatic (AI) reviewer.
+    review_verdict: Mapped[str | None] = mapped_column(String(8))
+    review_note: Mapped[str | None] = mapped_column(Text)
+    reviewed_by: Mapped[str | None] = mapped_column(String(64))
+    reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     @property
     def is_active(self) -> bool:

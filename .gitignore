@@ -22,3 +22,5 @@ celerybeat-schedule*
 
 # Road zones per camera for the stopped-vehicle indication (camera ids differ per database)
 backend/zones.json
+# Photos of anomaly indications kept by the backend (ANOMALY_PHOTO_DIR)
+backend/data/

@@ -55,7 +55,8 @@ def _rides(person: list[float], vehicle: list[float]) -> bool:
 
 def people_on_foot(boxes: list[dict], zone,
                    min_height: float = MIN_BOX_HEIGHT) -> list[dict]:
-    """People in the zone, close enough to be reliable, who are not riding a vehicle."""
+    """People in the zone, close enough to be reliable, who are not riding a vehicle
+    or a bicycle."""
     vehicles = [b["box"] for b in boxes if b["category"] != "person"]
     return [
         b for b in boxes

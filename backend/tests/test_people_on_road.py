@@ -201,3 +201,16 @@ def test_camera_can_switch_off_a_check(tmp_path):
     zones = sv.Zones(str(path))
     assert zones.get(1) == [ROAD] and zones.disabled(1) == {"stopped_vehicle"}
     assert zones.get(2) == [ROAD] and zones.disabled(2) == set()
+
+
+def test_bicycles_are_helpers_not_vehicles_and_cyclists_are_riders():
+    # Camera 3, 19:19: a group of cyclists waiting at the crossing counted as people on foot.
+    bike = [0.50, 0.65, 0.56, 0.75]
+    rider = [0.51, 0.62, 0.55, 0.72]
+    model = FakeYolo([(1, 0.8, bike), (0, 0.8, rider), (2, 0.9, [0.1, 0.6, 0.2, 0.7])])
+    counts, boxes = VehicleDetector(model, CLASSES, confidence=0.25, iou=0.5,
+                                    person_label="person").detect_with_boxes(None)
+    assert (counts.car, counts.total) == (1, 1)  # the bicycle is not a vehicle
+    assert sorted(b["category"] for b in boxes) == ["bicycle", "car", "person"]
+    assert 1 in model.calls[0]["classes"]
+    assert pr.people_on_foot(boxes, ROAD) == []  # the cyclist rides
