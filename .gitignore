@@ -19,3 +19,6 @@ backend/models/*.pt
 
 # Celery Beat schedule state (created where `celery beat` runs)
 celerybeat-schedule*
+
+# Road zones per camera for the stopped-vehicle indication (camera ids differ per database)
+backend/zones.json

@@ -64,9 +64,32 @@ def resolve_class_ids(model_names: dict[int, str] | list[str], wanted: dict[str,
     return mapping
 
 
+PERSON = "person"
+
+
+def _iou(a: list[float], b: list[float]) -> float:
+    ix = max(0.0, min(a[2], b[2]) - max(a[0], b[0]))
+    iy = max(0.0, min(a[3], b[3]) - max(a[1], b[1]))
+    inter = ix * iy
+    union = (a[2] - a[0]) * (a[3] - a[1]) + (b[2] - b[0]) * (b[3] - b[1]) - inter
+    return inter / union if union > 0 else 0.0
+
+
+def agnostic_nms(items: list[dict], iou: float) -> list[dict]:
+    """Keep the most confident of every group of boxes overlapping more than ``iou``,
+    whatever their class (what Ultralytics' agnostic_nms does). IoU does not change
+    when x and y are scaled, so relative coordinates give the same result as pixels."""
+    kept: list[dict] = []
+    for item in sorted(items, key=lambda d: d["conf"], reverse=True):
+        if all(_iou(item["box"], k["box"]) <= iou for k in kept):
+            kept.append(item)
+    return kept
+
+
 class VehicleDetector:
     def __init__(self, model: Any, class_names: dict[str, str], *, confidence: float, iou: float,
-                 imgsz: int = 640, device: str | None = None, agnostic_nms: bool = True):
+                 imgsz: int = 640, device: str | None = None, agnostic_nms: bool = True,
+                 person_label: str | None = None):
         self.model = model
         self.class_map = resolve_class_ids(model.names, class_names)
         self.confidence = confidence
@@ -74,41 +97,76 @@ class VehicleDetector:
         self.imgsz = imgsz
         self.device = device
         self.agnostic_nms = agnostic_nms
-        log.info("Detector ready; class map %s, conf=%.2f iou=%.2f", self.class_map, confidence, iou)
+        self.person_id = self._person_id(model.names, person_label)
+        log.info("Detector ready; class map %s, person id %s, conf=%.2f iou=%.2f",
+                 self.class_map, self.person_id, confidence, iou)
+
+    @staticmethod
+    def _person_id(model_names, label: str | None) -> int | None:
+        if not label:
+            return None
+        names = dict(enumerate(model_names)) if isinstance(model_names, (list, tuple)) else model_names
+        for class_id, name in names.items():
+            if str(name).strip().lower() == label.strip().lower():
+                return int(class_id)
+        log.warning("Model has no '%s' label; people on the road are not detected.", label)
+        return None
 
     def detect(self, frame) -> VehicleCounts:
         return self.detect_with_boxes(frame)[0]
 
     def detect_with_boxes(self, frame) -> tuple[VehicleCounts, list[dict]]:
-        """Counts plus the counted boxes, as {"category", "conf", "box": [x1, y1, x2, y2]}
-        with coordinates relative to the frame (0..1), for the live view."""
+        """Vehicle counts plus boxes {"category", "conf", "box": [x1, y1, x2, y2]} relative to
+        the frame (0..1). Boxes include people (category "person") when a person label is
+        set; people are never counted as vehicles.
+
+        With people included, class-agnostic NMS must not run in predict(): a rider's box
+        overlaps the motorcycle's and would remove it. predict() then runs per-class NMS and
+        the class-agnostic step is applied here to the vehicle boxes only.
+        """
+        with_people = self.person_id is not None
+        classes = sorted(self.class_map) + ([self.person_id] if with_people else [])
         kwargs = dict(
             conf=self.confidence,
             iou=self.iou,
             imgsz=self.imgsz,
-            classes=sorted(self.class_map),
-            agnostic_nms=self.agnostic_nms,
+            classes=classes,
+            agnostic_nms=self.agnostic_nms and not with_people,
             verbose=False,
         )
         if self.device:
             kwargs["device"] = self.device
         result = self.model.predict(frame, **kwargs)[0]
-        counts = dict.fromkeys(CATEGORIES, 0)
-        found: list[dict] = []
+        vehicles: list[dict] = []
+        unplaced: list[str] = []  # vehicles without coordinates (only from test doubles)
+        people: list[dict] = []
         boxes = result.boxes
         if boxes is not None and len(boxes):
             class_ids = boxes.cls.tolist()
             scores = boxes.conf.tolist()
             xyxyn = boxes.xyxyn.tolist() if getattr(boxes, "xyxyn", None) is not None else [None] * len(class_ids)
             for class_id, score, xy in zip(class_ids, scores, xyxyn):
-                category = self.class_map.get(int(class_id))
                 # predict() already applies conf; re-check in case a backend ignores it.
-                if category and score >= self.confidence:
-                    counts[category] += 1
-                    if xy is not None:
-                        found.append({"category": category, "conf": round(float(score), 3),
-                                      "box": [round(float(v), 4) for v in xy]})
-        return VehicleCounts(**counts), found
+                if score < self.confidence:
+                    continue
+                category = self.class_map.get(int(class_id))
+                if category is None and with_people and int(class_id) == self.person_id:
+                    category = PERSON
+                if category is None:
+                    continue
+                if xy is None:
+                    if category != PERSON:
+                        unplaced.append(category)
+                    continue
+                item = {"category": category, "conf": round(float(score), 3),
+                        "box": [round(float(v), 4) for v in xy]}
+                (people if category == PERSON else vehicles).append(item)
+        if with_people and self.agnostic_nms:
+            vehicles = agnostic_nms(vehicles, self.iou)
+        counts = dict.fromkeys(CATEGORIES, 0)
+        for category in [v["category"] for v in vehicles] + unplaced:
+            counts[category] += 1
+        return VehicleCounts(**counts), vehicles + people
 
 
 _override: VehicleDetector | None = None
@@ -150,6 +208,7 @@ def get_detector(config) -> VehicleDetector:
             imgsz=config["YOLO_IMGSZ"],
             device=config["YOLO_DEVICE"],
             agnostic_nms=config["YOLO_AGNOSTIC_NMS"],
+            person_label=config.get("YOLO_PERSON_CLASS") or None,
         )
         _local.detector = detector
     return detector

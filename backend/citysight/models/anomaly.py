@@ -10,7 +10,9 @@ from ..extensions import db
 
 ANOMALY_HIGH_DENSITY = "high_density"
 ANOMALY_CAMERA_OFFLINE = "camera_offline"
-ANOMALY_TYPES = (ANOMALY_HIGH_DENSITY, ANOMALY_CAMERA_OFFLINE)
+ANOMALY_STOPPED_VEHICLE = "stopped_vehicle"
+ANOMALY_PEOPLE_ON_ROAD = "people_on_road"
+ANOMALY_TYPES = (ANOMALY_HIGH_DENSITY, ANOMALY_CAMERA_OFFLINE, ANOMALY_STOPPED_VEHICLE, ANOMALY_PEOPLE_ON_ROAD)
 
 
 class Anomaly(db.Model):
@@ -19,6 +21,11 @@ class Anomaly(db.Model):
     high_density   - the vehicles per frame stayed far above what this camera
                      usually shows (possible jam, accident, event, road closure)
     camera_offline - no frame of this active camera was processed for a while
+    stopped_vehicle - a vehicle stayed in place inside the camera's road zone
+                     while other traffic kept moving (possible breakdown, crash,
+                     or illegal parking)
+    people_on_road - several people stayed on the lanes of the road zone (possible
+                     crash, crowd or road block)
 
     ``ended_at IS NULL`` means still active. The partial unique index allows
     at most one active anomaly per camera and type.
@@ -26,7 +33,7 @@ class Anomaly(db.Model):
 
     __tablename__ = "anomalies"
     __table_args__ = (
-        CheckConstraint("type IN ('high_density', 'camera_offline')", name="type_valid"),
+        CheckConstraint("type IN ('high_density', 'camera_offline', 'stopped_vehicle', 'people_on_road')", name="type_valid"),
         CheckConstraint("ended_at IS NULL OR ended_at >= started_at", name="ended_after_start"),
         Index("uq_anomalies_active", "camera_id", "type", unique=True,
               postgresql_where=text("ended_at IS NULL")),

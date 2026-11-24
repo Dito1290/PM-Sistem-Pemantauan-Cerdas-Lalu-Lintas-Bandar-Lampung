@@ -104,6 +104,9 @@ class Config:
     # Class-agnostic NMS: overlapping boxes (IoU > YOLO_IOU) count as one
     # object even if labelled car and truck, per proposal Bab 5.2.1 d.
     YOLO_AGNOSTIC_NMS = _bool("YOLO_AGNOSTIC_NMS", True)
+    # People are detected too (never counted as vehicles) for the people_on_road
+    # indication. Empty = vehicles only, exactly as before.
+    YOLO_PERSON_CLASS = os.getenv("YOLO_PERSON_CLASS", "person")
     # Maps our categories to the label names in model.names. Override when a
     # custom model uses different names (e.g. {"motorcycle": "motor"}).
     YOLO_CLASS_NAMES = json.loads(
@@ -128,6 +131,19 @@ class Config:
     ANOMALY_DENSITY_WINDOW_MINUTES = _float("ANOMALY_DENSITY_WINDOW_MINUTES", 4)
     ANOMALY_DENSITY_MIN_FRAMES = _int("ANOMALY_DENSITY_MIN_FRAMES", 3)
     ANOMALY_BASELINE_DAYS = _int("ANOMALY_BASELINE_DAYS", 14)
+    # stopped_vehicle: a vehicle stays in place this long inside the camera's
+    # road zone while other traffic in the zone moves. Zones: JSON file
+    # {"<camera_id>": [[x, y], ...]} relative to the frame (scripts/atur_zona.py);
+    # cameras without a zone are not checked.
+    ANOMALY_STOPPED_SECONDS = _float("ANOMALY_STOPPED_SECONDS", 120)
+    ANOMALY_ZONES_FILE = os.getenv("ANOMALY_ZONES_FILE", "zones.json")
+    # people_on_road: at least MIN people (not riding a vehicle) stay around one
+    # spot inside the road zone for SECONDS (crossings and passers-by move on). Needs YOLO_PERSON_CLASS and a zone for the camera.
+    ANOMALY_PEOPLE_MIN = _int("ANOMALY_PEOPLE_MIN", 3)
+    ANOMALY_PEOPLE_SECONDS = _float("ANOMALY_PEOPLE_SECONDS", 30)
+    # Both live checks ignore boxes lower than this share of the frame height
+    # (far away, unreliable). Measured on Seribu Wajah, 2026-11-24.
+    ANOMALY_MIN_BOX_HEIGHT = _float("ANOMALY_MIN_BOX_HEIGHT", 0.06)
     # camera_offline: an active camera has no processed frame for this long.
     ANOMALY_OFFLINE_MINUTES = _float("ANOMALY_OFFLINE_MINUTES", 5)
     # Optional Telegram alert when an anomaly starts or ends; empty = off.
@@ -163,6 +179,7 @@ class TestingConfig(Config):
     TELEGRAM_BOT_TOKEN = ""
     TELEGRAM_CHAT_ID = ""
     DETECTION_SAVE_INTERVAL_SECONDS = 0  # existing tests expect one row per frame
+    ANOMALY_ZONES_FILE = ""  # no zones unless a test sets a file
 
 
 CONFIGS = {
@@ -203,6 +220,10 @@ def validate_config(config: dict) -> None:
         raise RuntimeError("FRONTEND_ORIGINS must list explicit origins, not '*'.")
     if config["ANOMALY_DENSITY_RATIO"] <= 1 or config["ANOMALY_DENSITY_MIN_FRAMES"] < 1:
         raise RuntimeError("ANOMALY_DENSITY_RATIO must be > 1 and ANOMALY_DENSITY_MIN_FRAMES >= 1.")
+    if config["ANOMALY_STOPPED_SECONDS"] <= 0 or config["ANOMALY_PEOPLE_SECONDS"] <= 0:
+        raise RuntimeError("ANOMALY_STOPPED_SECONDS and ANOMALY_PEOPLE_SECONDS must be > 0.")
+    if config["ANOMALY_PEOPLE_MIN"] < 1:
+        raise RuntimeError("ANOMALY_PEOPLE_MIN must be >= 1.")
     if config["ANOMALY_DENSITY_WINDOW_MINUTES"] <= 0 or config["ANOMALY_OFFLINE_MINUTES"] <= 0:
         raise RuntimeError("ANOMALY_DENSITY_WINDOW_MINUTES and ANOMALY_OFFLINE_MINUTES must be > 0.")
     if bool(config["TELEGRAM_BOT_TOKEN"]) != bool(config["TELEGRAM_CHAT_ID"]):

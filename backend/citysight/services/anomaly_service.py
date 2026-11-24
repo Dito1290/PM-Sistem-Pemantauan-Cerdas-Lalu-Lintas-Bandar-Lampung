@@ -18,7 +18,8 @@ from sqlalchemy import select, text
 from sqlalchemy.dialects.postgresql import insert
 
 from ..extensions import db
-from ..models import ANOMALY_CAMERA_OFFLINE, ANOMALY_HIGH_DENSITY, Anomaly, Camera
+from ..models import (ANOMALY_CAMERA_OFFLINE, ANOMALY_HIGH_DENSITY, ANOMALY_PEOPLE_ON_ROAD,
+                      ANOMALY_STOPPED_VEHICLE, Anomaly, Camera)
 from ..pipeline import camera_state
 from ..redis_client import get_redis
 from ..timeutil import floor_hour, isoformat, utcnow
@@ -138,6 +139,95 @@ def evaluate_density(camera_id: int, frame_at: datetime, total_vehicle: int,
     return events + _start(camera_id, ANOMALY_HIGH_DENSITY, window["first_at"], message, details, photo_jpeg)
 
 
+# --- stopped_vehicle and people_on_road (checked on every live frame) -----------
+
+# A live indication that is briefly not reported (vehicle or people hidden by
+# traffic, traffic paused at a light) does not end; it ends after this long
+# without a report.
+LIVE_END_SECONDS = 30.0
+STOPPED_END_SECONDS = LIVE_END_SECONDS
+_CATEGORY_ID = {"car": "mobil", "motorcycle": "motor", "bus": "bus", "truck": "truk"}
+
+
+def evaluate_stopped(camera_id: int, frame_at: datetime, stopped: list[dict], monitor, *,
+                     monitor_created: bool, photo_jpeg: bytes | None = None) -> list[dict]:
+    """Run after every live detection with the result of StoppedVehicleMonitor.update."""
+    def opening():
+        longest = max(v["stopped_seconds"] for v in stopped)
+        names = ", ".join(_CATEGORY_ID.get(v["category"], v["category"]) for v in stopped)
+        message = (f"Kendaraan berhenti tidak wajar: {names} diam sekitar {_duration(timedelta(seconds=longest))} "
+                   "di lajur jalan sementara kendaraan lain bergerak. "
+                   "Bisa karena mogok, kecelakaan, atau parkir sembarangan.")
+        details = {"vehicles": stopped, "stop_seconds": monitor.stop_seconds}
+        return frame_at - timedelta(seconds=longest), message, details, [v["box"] for v in stopped]
+
+    return _evaluate_live(ANOMALY_STOPPED_VEHICLE, camera_id, frame_at, bool(stopped), monitor, opening,
+                          monitor_created=monitor_created, photo_jpeg=photo_jpeg,
+                          end_reason="Kendaraan sudah bergerak atau tidak terlihat lagi.")
+
+
+def evaluate_people(camera_id: int, frame_at: datetime, report: dict | None, monitor, *,
+                    monitor_created: bool, photo_jpeg: bytes | None = None) -> list[dict]:
+    """Run after every live detection with the result of PeopleOnRoadMonitor.update."""
+    def opening():
+        message = (f"Orang di badan jalan: {report['people']} orang berada di lajur jalan selama sekitar "
+                   f"{report['seconds']} detik. Bisa karena kecelakaan, kerumunan, atau penutupan jalan.")
+        details = {"people": report["people"], "seconds": report["seconds"], "boxes": report["boxes"],
+                   "min_people": monitor.min_people}
+        return frame_at - timedelta(seconds=report["seconds"]), message, details, report["boxes"]
+
+    return _evaluate_live(ANOMALY_PEOPLE_ON_ROAD, camera_id, frame_at, report is not None, monitor, opening,
+                          monitor_created=monitor_created, photo_jpeg=photo_jpeg,
+                          end_reason="Orang sudah tidak berada di lajur jalan.")
+
+
+def _evaluate_live(type_: str, camera_id: int, frame_at: datetime, reported: bool, monitor, opening, *,
+                   monitor_created: bool, photo_jpeg: bytes | None, end_reason: str) -> list[dict]:
+    """Shared start/end logic. ``monitor`` has ``alert_open`` and ``last_reported``;
+    ``opening()`` returns (started_at, message, details, boxes_to_mark)."""
+    events: list[dict] = []
+    if monitor_created:
+        # Worker (re)started: earlier state is gone, so an open indication can no
+        # longer be ended by this monitor. Close it; it reopens if still true.
+        old = _active(camera_id, type_)
+        if old is not None:
+            events += _end(old, frame_at, reason="Pemantauan dimulai ulang, indikasi ditutup.")
+    if not reported and not monitor.alert_open:
+        return events
+
+    active = _active(camera_id, type_)
+    if reported and active is None:
+        started_at, message, details, boxes = opening()
+        events += _start(camera_id, type_, started_at, message, details, _mark(photo_jpeg, boxes))
+        monitor.alert_open = True
+    elif reported:
+        monitor.alert_open = True
+    elif active is None:
+        monitor.alert_open = False  # ended elsewhere (camera offline or switched off)
+    elif frame_at.timestamp() - monitor.last_reported >= LIVE_END_SECONDS:
+        events += _end(active, frame_at, reason=end_reason)
+        monitor.alert_open = False
+    return events
+
+
+def _mark(jpeg: bytes | None, boxes: list[list[float]]) -> bytes | None:
+    """Red boxes (relative coordinates) on the photo sent to Telegram."""
+    if not jpeg:
+        return None
+    try:
+        import cv2
+        import numpy as np
+
+        image = cv2.imdecode(np.frombuffer(jpeg, np.uint8), cv2.IMREAD_COLOR)
+        h, w = image.shape[:2]
+        for x1, y1, x2, y2 in boxes:
+            cv2.rectangle(image, (int(x1 * w), int(y1 * h)), (int(x2 * w), int(y2 * h)), (0, 0, 255), 4)
+        ok, buf = cv2.imencode(".jpg", image, [cv2.IMWRITE_JPEG_QUALITY, 85])
+        return buf.tobytes() if ok else jpeg
+    except Exception:  # noqa: BLE001  (the plain photo is still useful)
+        return jpeg
+
+
 # --- camera_offline -----------------------------------------------------------
 
 def check_cameras(now: datetime | None = None, allow_start: bool = True) -> list[dict]:
@@ -167,9 +257,11 @@ def check_cameras(now: datetime | None = None, allow_start: bool = True) -> list
             continue
         if active is not None or not allow_start:
             continue
-        density = _active(camera.id, ANOMALY_HIGH_DENSITY)
-        if density is not None:
-            events += _end(density, now, reason="Kamera tidak mengirim gambar, kepadatan tidak bisa dipantau.")
+        for type_, what in ((ANOMALY_HIGH_DENSITY, "kepadatan"), (ANOMALY_STOPPED_VEHICLE, "kendaraan diam"),
+                            (ANOMALY_PEOPLE_ON_ROAD, "orang di jalan")):
+            still_open = _active(camera.id, type_)
+            if still_open is not None:
+                events += _end(still_open, now, reason=f"Kamera tidak mengirim gambar, {what} tidak bisa dipantau.")
         state = states.get(camera.id, {})
         message = f"Kamera tidak mengirim gambar selama {_duration(now - reference)}. {_offline_cause(state)}"
         details = {
@@ -270,7 +362,9 @@ def _announce(anomaly: Anomaly, change: str, photo_jpeg: bytes | None = None) ->
     return event
 
 
-_LABELS = {ANOMALY_HIGH_DENSITY: "Kepadatan tidak wajar", ANOMALY_CAMERA_OFFLINE: "Kamera tidak mengirim gambar"}
+_LABELS = {ANOMALY_HIGH_DENSITY: "Kepadatan tidak wajar", ANOMALY_CAMERA_OFFLINE: "Kamera tidak mengirim gambar",
+           ANOMALY_STOPPED_VEHICLE: "Kendaraan berhenti tidak wajar",
+           ANOMALY_PEOPLE_ON_ROAD: "Orang di badan jalan"}
 
 
 def _telegram_text(anomaly: Anomaly, camera: Camera | None, change: str) -> str:

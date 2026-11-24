@@ -192,3 +192,92 @@ Dengan satu thread, worker mengerjakan frame ketiga kamera bergantian (sekitar 8
     celery -A celery_worker.celery worker -Q detection,stats --pool=threads --concurrency 3 -l info
 
 Tampilan langsung: setelah setiap deteksi, worker menimpa hash Redis `camera:live:<id>` (berlaku 30 detik) berisi JPEG gambar itu dan kotak yang ia hitung (`category`, `conf`, `box` [x1, y1, x2, y2] relatif 0..1, lihat `pipeline/live_frame.py`). Penampil cukup menggambar kotak itu tanpa menjalankan YOLO kedua, sehingga kotak di layar sama persis dengan yang dihitung. Dengan penampil terbuka, deteksi tetap 3,6-4,0 fps per kamera untuk 3 kamera (sebelumnya turun ke sekitar 2,7 fps karena penampil menjalankan YOLO sendiri). Data yang sama bisa dipakai untuk tampilan live di dashboard.
+
+## 10. Indikasi kendaraan berhenti tidak wajar (2026-11-18, percobaan)
+
+Jenis anomali ketiga, `stopped_vehicle` (migrasi `0003`): kendaraan yang diam di tempat selama `ANOMALY_STOPPED_SECONDS` (bawaan 120 detik) **di dalam zona jalan kamera itu**, sementara kendaraan lain di zona tetap bergerak. Ini indikasi mogok, kecelakaan, atau parkir sembarangan di lajur. Seperti jenis lain, operator yang memastikan.
+
+Cara kerja (`pipeline/stopped_vehicle.py`, dihitung worker pada setiap frame live, sekitar 4 fps):
+
+1. Hanya kotak yang titik bawah tengahnya (tempat roda) ada di zona yang diperhatikan. Zona per kamera digambar dengan `python scripts/atur_zona.py --kamera <id>` dan disimpan di `ANOMALY_ZONES_FILE` (bawaan `backend/zones.json`, tidak masuk git karena id kamera berbeda per basis data). Kamera tanpa zona tidak dicek.
+2. Tidak memakai pelacak. Kendaraan yang diam kotaknya tetap di tempat, jadi setiap kotak dicocokkan dengan kotak saat kendaraan itu pertama diam (IoU minimal 0,5). Kendaraan yang tertutup kendaraan lain sampai 20 detik tetap dianggap sama.
+3. Kendaraan dihitung diam hanya bila terlihat di minimal 70% frame sejak pertama diam. Titik yang terus dilewati kendaraan berbeda hanya sesekali terisi, sehingga tidak terbaca sebagai satu kendaraan yang diam.
+4. Peringatan hanya muncul bila ada kendaraan yang bergerak di zona dalam 30 detik terakhir. Antrean lampu merah atau macet total (semua diam) tidak memicu peringatan.
+5. Peringatan selesai 30 detik setelah kendaraan itu tidak lagi terbaca diam. Bila worker dinyalakan ulang, peringatan yang masih terbuka ditutup karena keadaan sebelumnya hilang; bila kendaraan masih diam, peringatan muncul lagi setelah batas waktu. Kamera mati atau dinonaktifkan juga menutupnya.
+6. Telegram menerima foto dengan kotak merah di kendaraan yang diam.
+
+Batasan percobaan ini:
+
+1. Kamera Seribu Wajah adalah PTZ. Bila kamera berputar atau zoom, zona tidak lagi pas dengan jalan dan kendaraan parkir bisa masuk zona. Belum ada pendeteksi perubahan sudut kamera.
+2. Keadaan disimpan di memori proses worker. Dengan lebih dari satu proses worker, satu kamera bisa ditangani proses yang berbeda dan hitungannya terpecah.
+3. Belum diuji pada kejadian nyata di Bandar Lampung. Pengujian awal memakai video CCTV statis berisi kendaraan mogok atau kecelakaan.
+
+## 11. Indikasi orang di badan jalan (2026-11-24, percobaan)
+
+Uji video kecelakaan motor (bagian 10) menunjukkan motor yang jatuh biasanya diangkat dalam hitungan detik, sedangkan orang-orang berlari ke lajur dan tinggal di sana. Karena itu ditambahkan jenis anomali keempat, `people_on_road` (ikut migrasi `0003`): minimal `ANOMALY_PEOPLE_MIN` orang (bawaan 3) yang **tidak sedang menaiki kendaraan** berada di zona jalan selama `ANOMALY_PEOPLE_SECONDS` (bawaan 10 detik). Ini indikasi kecelakaan, kerumunan, tawuran, atau penutupan jalan. Zona yang dipakai sama dengan `stopped_vehicle`.
+
+Perubahan detektor: YOLO kini juga mendeteksi kelas `person` (`YOLO_PERSON_CLASS=person`; kosongkan untuk mematikan). Orang tidak pernah masuk hitungan kendaraan. NMS lintas kelas tidak lagi dijalankan di `predict()`, karena kotak pengendara akan menghapus kotak motornya. `predict()` menjalankan NMS per kelas, lalu NMS lintas kelas dijalankan sendiri khusus antar kendaraan. Pada 49 gambar (14 gambar malam Seribu Wajah dan 35 frame video uji), hitungan mobil, motor, bus, dan truk **sama persis** dengan sebelum perubahan (126/161/29/29).
+
+Cara kerja (`pipeline/people_on_road.py`, setiap frame live):
+
+1. Orang dihitung bila titik bawah tengah kotaknya (kaki) ada di zona.
+2. Orang yang minimal 50% kotaknya berada di dalam kotak kendaraan dianggap pengendara atau penumpang dan tidak dihitung.
+3. Dalam jendela `ANOMALY_PEOPLE_SECONDS`, minimal 70% frame harus berisi cukup orang. Penyeberang jalan yang lewat beberapa detik tidak memicu.
+4. Peringatan selesai 30 detik setelah syarat tidak terpenuhi lagi. Foto Telegram diberi kotak merah pada orang-orang itu.
+
+Hasil uji video *Kecelakaan Rombongan RX King di Pacitan* (video berita yang dipotong dan diputar ulang setiap 8-20 detik):
+
+| Syarat | Hasil |
+|---|---|
+| 3 orang, 10 detik (bawaan) | Tidak muncul. Jumlah orang di lajur 0-4 dan terputus oleh potongan video |
+| 3 orang, 5 detik | Muncul di detik 32 dan 49 (5 orang) |
+| 2 orang, 8 detik | Muncul di detik 30, 35, 46, dan 62 (4-5 orang) |
+
+Pada kejadian nyata, orang biasanya tinggal di lajur beberapa menit untuk menolong, jadi syarat bawaan diperkirakan cukup. Ini belum dibuktikan dengan rekaman utuh.
+
+Batasan:
+
+1. Pengendara yang motornya tidak terdeteksi (tertutup kendaraan lain) terhitung sebagai orang di lajur.
+2. Juru parkir, polisi lalu lintas, atau pedagang yang memang biasa berdiri di lajur bisa memicu peringatan. Keluarkan tempat mereka dari zona.
+3. Batasan zona dan kamera PTZ sama dengan bagian 10.
+
+Uji kedua: video *"Terekam CCTV! kompilasi kecelakaan motor dijalan terbaru 2025"* (7 potongan dari CCTV yang berbeda, 22-40 detik per potongan), pengaturan bawaan (3 orang, 10 detik). Potongan #2 adalah CCTV lebar dengan zona yang digambar hanya di aspal. Potongan lain berupa video vertikal sempit, jadi zonanya seluruh gambar dan penyeberang di trotoar ikut terhitung; hasilnya hanya perkiraan.
+
+| Potongan | Durasi | Orang di lajur (maks) | Peringatan orang di badan jalan |
+|---|---|---|---|
+| #2 dua motor, satu jatuh (zona cermat) | 40 dtk | 9 | Muncul 15 dtk setelah potongan mulai (5 orang: 2 korban, 3 petugas) |
+| #3 penyeberang tertabrak | 30 dtk | 11 | Muncul setelah 23 dtk |
+| #4 motor kencang menabrak | 23 dtk | 9 | Muncul setelah 10 dtk |
+| #5 belok tanpa sein, diserempet | 31 dtk | 6 | Tidak muncul |
+| #6 dua pengendara jatuh | 22 dtk | 7 | Muncul setelah 16 dtk |
+| #7 pengendara jatuh dua kali | 23 dtk | 13 | Muncul setelah 9 dtk |
+| #8 pengendara jatuh | 28 dtk | 11 | Muncul setelah 9 dtk |
+
+Pada video yang sama, kendaraan paling lama diam hanya 2-31 detik, jauh di bawah batas `stopped_vehicle` (120 detik). Ini menguatkan bahwa untuk kecelakaan motor, tanda yang dapat diandalkan adalah orang di lajur, bukan kendaraan diam.
+
+Yang belum diuji: seberapa sering peringatan muncul **tanpa** kecelakaan pada lalu lintas Seribu Wajah biasa (peringatan palsu). Zona kamera 1-3 sudah digambar di `backend/zones.json` dari gambar 18 November.
+
+## 12. Uji lalu lintas biasa di Seribu Wajah (2026-11-24, 15.28 sampai sore)
+
+Kedua indikasi live (`stopped_vehicle`, `people_on_road`) dijalankan pada 3 kamera Seribu Wajah tanpa kejadian khusus, untuk mencari peringatan palsu. Setiap peringatan dicatat beserta fotonya (`deteksi_kendaraan\catat_anomali.py`). Temuan dan perbaikannya:
+
+| Temuan | Penyebab | Perbaikan |
+|---|---|---|
+| "Orang di badan jalan" dari pengendara motor (kamera 1) | Badan pengendara menjulang di atas motor; kotak orang hanya 30-70% tertutup kotak motor, jadi aturan "minimal 50% tertutup" gagal | Orang dianggap pengendara bila titik bawah kotaknya (tempat duduk/kaki) ada di dalam kotak kendaraan. Pada 60 detik lalu lintas, rata-rata "pejalan kaki di lajur" turun ke 0,06-0,37 per frame (maksimal 2-3) |
+| Kendaraan kecil di ujung jauh jalan dianggap diam | Di kejauhan kendaraan berbeda tampak menumpuk di titik yang sama | Kotak yang tingginya di bawah `ANOMALY_MIN_BOX_HEIGHT` (6% tinggi gambar) diabaikan oleh kedua indikasi. Sisa "pejalan kaki" yang salah hitung umumnya setinggi 4-5% |
+| Motor parkir di tepi jalan, penjemput depan SD, skuter di samping gerobak | Batas zona menempel ke trotoar | Batas zona digeser menjauhi tepi jalan (kamera 1 dan 2) |
+| Truk yang mengantre di arus kiri kamera 1 dianggap diam, karena arus kanan lancar | Satu zona untuk dua arah, sehingga "kendaraan lain bergerak" terpenuhi oleh arah sebaliknya | Zona boleh berisi beberapa area (satu per arah). Syarat "kendaraan lain bergerak" dicek di area yang sama. Kamera 1 dibagi menjadi arus kiri dan arus kanan |
+
+Satu peringatan dinilai benar: mobil MPV berhenti sekitar 8 menit di tepi lajur kiri kamera 1 (16.11-16.19). Tepi lajur sengaja tetap di dalam zona, karena mobil mogok biasanya menepi ke sana.
+
+Tambahan (16.30): di bagian jauh tepi kiri kamera 1, bus dan pikap tiga kali berhenti di titik yang sama (tempat naik/turun penumpang). Batas jauh area arus kiri dinaikkan dari 24% ke 30% tinggi gambar. Ditemukan juga bahwa kotak yang terpotong tepi bawah gambar terbaca di luar zona, karena titik bawahnya tepat di garis batas; `in_zone` kini menggeser titik itu sedikit ke dalam.
+
+Tambahan (16.50): saat jam pulang sekolah, arus kanan kamera 1 dipenuhi belasan motor penjemput yang diam berjajar, sementara motor lain menyelip pelan, sehingga motor yang diam dilaporkan. Mogok atau kecelakaan biasanya hanya menyisakan satu atau dua kendaraan diam, sedangkan macet dan penjemputan membuat banyak kendaraan diam bersamaan. Aturan baru: bila dalam satu area ada minimal `QUEUE_MIN_VEHICLES` (3) kendaraan yang sudah diam 30 detik, area itu dianggap antrean, macet, atau penjemputan, dan tidak dilaporkan. Konsekuensinya, mogok yang terjadi di tengah kemacetan juga tidak dilaporkan; kemacetan itu sendiri tertangkap oleh `high_density`.
+
+Temuan lain yang belum diperbaiki: di kamera 2, tiga pejalan kaki (kemungkinan mahasiswa) berjalan beriringan menyusuri tepi jalan lebih dari 10 detik dan memicu `people_on_road`. Usulan perbaikannya: hanya menghitung orang yang tinggal di sekitar satu titik, bukan yang terus berpindah.
+
+Tambahan (17.20), setelah peringatan palsu "orang di badan jalan" karena rombongan anak SD menyeberang (kamera 1), pejalan kaki berjalan beriringan (kamera 2), dan orang bersiap naik motor:
+
+1. `people_on_road` kini mengikuti setiap orang dari posisi kakinya. Yang dihitung hanya orang yang **bertahan** dalam radius 2 kali tinggi badannya dari posisi pertama, terlihat di minimal 60% frame. Orang yang berjalan terus tidak pernah dihitung.
+2. `ANOMALY_PEOPLE_SECONDS` bawaan dinaikkan dari 10 ke **30 detik**. Rombongan menyeberang dan orang yang bersiap naik motor biasanya selesai dalam 10-20 detik, sedangkan setelah kecelakaan orang bertahan beberapa menit. Akibatnya, potongan video kecelakaan pendek (22-40 detik) di bagian 11 kemungkinan besar tidak lagi memicu peringatan.
+3. Pemeriksaan bisa dimatikan per kamera: `{"<id>": {"areas": [...], "disabled": ["stopped_vehicle"]}}`. Kamera 1 berada dekat pom bensin (bus dan truk antre solar), tempat parkir motor di kedua tepi, dan penjemput SD 2 Rajabasa, sehingga `stopped_vehicle` dimatikan di sana. Kamera 1 tetap memakai `people_on_road`, `high_density`, dan `camera_offline`.

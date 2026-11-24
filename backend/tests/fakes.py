@@ -13,10 +13,12 @@ class _List(list):
 
 class _Boxes:
     def __init__(self, detections):
-        self.cls = _List(cls for cls, _ in detections)
-        self.conf = _List(conf for _, conf in detections)
-        # One fixed box per detection, relative to the frame like Ultralytics' xyxyn.
-        self.xyxyn = _List([0.1 * i, 0.2, 0.1 * i + 0.05, 0.3] for i in range(len(detections)))
+        self.cls = _List(d[0] for d in detections)
+        self.conf = _List(d[1] for d in detections)
+        # Relative boxes like Ultralytics' xyxyn: given as a third element, or one
+        # fixed, non-overlapping box per detection.
+        self.xyxyn = _List(d[2] if len(d) > 2 else [0.1 * i, 0.2, 0.1 * i + 0.05, 0.3]
+                           for i, d in enumerate(detections))
 
     def __len__(self):
         return len(self.cls)
@@ -32,13 +34,13 @@ class FakeYolo:
 
     def __init__(self, detections=(), names=None):
         self.names = names or COCO_NAMES
-        self.detections = list(detections)  # [(class_id, confidence)]
+        self.detections = list(detections)  # [(class_id, confidence[, [x1, y1, x2, y2]])]
         self.calls = []
 
     def predict(self, frame, **kwargs):
         self.calls.append(kwargs)
         allowed = set(kwargs.get("classes") or self.names)
-        kept = [(c, s) for c, s in self.detections if c in allowed and s >= kwargs.get("conf", 0)]
+        kept = [d for d in self.detections if d[0] in allowed and d[1] >= kwargs.get("conf", 0)]
         return [_Result(kept)]
 
 

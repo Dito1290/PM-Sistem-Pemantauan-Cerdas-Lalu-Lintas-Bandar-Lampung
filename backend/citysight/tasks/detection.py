@@ -16,7 +16,7 @@ from flask import current_app
 from sqlalchemy.exc import IntegrityError, OperationalError
 
 from ..extensions import db
-from ..pipeline import camera_state, frame_queue, live_frame
+from ..pipeline import camera_state, frame_queue, live_frame, people_on_road, stopped_vehicle
 from ..pipeline.detector import ModelConfigError, ModelUnavailable, get_detector
 from ..redis_client import get_redis
 from ..services import anomaly_service
@@ -65,6 +65,7 @@ def detect_latest_frame(camera_id: int) -> dict | None:
             event = _live_event(camera_id, captured_at, counts)
             live_frame.publish(client, camera_id, frame.jpeg, event, boxes)
             publish_detection(client, event)
+            _check_stopped(config, camera_id, captured_at, boxes, frame.jpeg)
             return event
         try:
             detection = save_detection(camera_id, captured_at, counts)
@@ -77,6 +78,7 @@ def detect_latest_frame(camera_id: int) -> dict | None:
         live_frame.publish(client, camera_id, frame.jpeg, event, boxes)
         publish_detection(client, event)
         _check_density(camera_id, detection, frame.jpeg)
+        _check_stopped(config, camera_id, captured_at, boxes, frame.jpeg)
         try:
             client.hset(camera_state.state_key(camera_id), mapping={"last_inference_error": ""})
         except redis.RedisError:
@@ -156,6 +158,36 @@ def _check_density(camera_id: int, detection, jpeg: bytes) -> None:
     except Exception:  # noqa: BLE001
         db.session.rollback()
         log.exception("Camera %s: anomaly check failed", camera_id)
+
+
+def _check_stopped(config, camera_id: int, captured_at: datetime, boxes: list[dict], jpeg: bytes) -> None:
+    """Every detected frame feeds the live monitors (stopped vehicle, people on the
+    road) of its camera. Cameras without a road zone are not checked."""
+    try:
+        zones = stopped_vehicle.zones_from(config["ANOMALY_ZONES_FILE"])
+        zone = zones.get(camera_id)
+        if zone is None:
+            return
+        disabled = zones.disabled(camera_id)
+        t = captured_at.timestamp()
+        vehicles = [b for b in boxes if b["category"] != "person"]
+        min_height = config["ANOMALY_MIN_BOX_HEIGHT"]
+        if "stopped_vehicle" not in disabled:
+            monitor, created = stopped_vehicle.monitor_for(camera_id, config["ANOMALY_STOPPED_SECONDS"], min_height)
+            with monitor.lock:
+                stopped = monitor.update(t, vehicles, zone)
+                anomaly_service.evaluate_stopped(camera_id, captured_at, stopped, monitor,
+                                                 monitor_created=created, photo_jpeg=jpeg)
+        if config.get("YOLO_PERSON_CLASS") and "people_on_road" not in disabled:
+            people, created = people_on_road.monitor_for(
+                camera_id, config["ANOMALY_PEOPLE_MIN"], config["ANOMALY_PEOPLE_SECONDS"], min_height)
+            with people.lock:
+                report = people.update(t, boxes, zone)
+                anomaly_service.evaluate_people(camera_id, captured_at, report, people,
+                                                monitor_created=created, photo_jpeg=jpeg)
+    except Exception:  # noqa: BLE001
+        db.session.rollback()
+        log.exception("Camera %s: live anomaly check failed", camera_id)
 
 
 def _record_inference_error(client, camera_id: int, message: str) -> None:

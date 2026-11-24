@@ -139,7 +139,7 @@ class AnomalyQuery(Pagination):
     per_page: int = Field(default=50, ge=1, le=500)
     status: Literal["active", "ended"] | None = None
     camera_id: int | None = Field(default=None, ge=1)
-    type: Literal["high_density", "camera_offline"] | None = None
+    type: Literal["high_density", "camera_offline", "stopped_vehicle", "people_on_road"] | None = None
 
 
 def parse_body(schema: type[T]) -> T:
